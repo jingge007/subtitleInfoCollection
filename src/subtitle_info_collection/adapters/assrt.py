@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import asyncio
+from urllib.parse import urljoin
+
+import httpx
+
+from ..errors import CollectorError, ErrorType
+from ..engines.subtitle_engine import detect_subtitle_format
+from ..models import (
+    DownloadedPayload,
+    MovieInfo,
+    SubtitleCandidate,
+    chinese_language_label,
+    format_chinese_description,
+)
+from .base import DownloadContext, ProviderHealth
+
+
+class AssrtProvider:
+    id = "assrt"
+    download_supported = True
+
+    def __init__(
+        self,
+        token: str = "",
+        base_url: str = "https://api.assrt.net/v1",
+        request_interval_ms: int = 13_000,
+        timeout: float = 30,
+    ) -> None:
+        self.token = token
+        self.base_url = base_url.rstrip("/")
+        self.request_interval_ms = request_interval_ms
+        self.timeout = timeout
+        self._last_request = 0.0
+
+    async def health(self) -> ProviderHealth:
+        if not self.token:
+            return ProviderHealth(
+                self.id, enabled=False, healthy=False, error_type=ErrorType.PROVIDER_DISABLED,
+                message="缺少 ASSRT_TOKEN",
+            )
+        return ProviderHealth(self.id, enabled=True, healthy=True)
+
+    async def _rate_limit(self) -> None:
+        now = asyncio.get_running_loop().time()
+        elapsed_ms = (now - self._last_request) * 1000
+        remaining = self.request_interval_ms - elapsed_ms
+        if self._last_request and remaining > 0:
+            await asyncio.sleep(remaining / 1000)
+        self._last_request = asyncio.get_running_loop().time()
+
+    def _keywords(self, movie: MovieInfo) -> list[str]:
+        values = [movie.title_zh, movie.title, movie.original_title]
+        return list(dict.fromkeys([value for value in values if value and len(value.strip()) >= 2]))
+
+    async def _request_json(self, endpoint: str, params: dict[str, object]) -> dict:
+        await self._rate_limit()
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            response = await client.get(
+                f"{self.base_url}{endpoint}",
+                params={"token": self.token, **params},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "subtitleInfoCollection/0.1",
+                },
+            )
+            if response.status_code in {429, 509}:
+                raise CollectorError(f"HTTP {response.status_code}", ErrorType.RATE_LIMITED, self.id)
+            response.raise_for_status()
+            payload = response.json()
+        if payload.get("status") not in (None, 0):
+            raise CollectorError(str(payload.get("error") or payload), ErrorType.PARSE_FAILED, self.id)
+        return payload
+
+    async def search(self, movie: MovieInfo) -> list[SubtitleCandidate]:
+        if not self.token:
+            return []
+        result: list[SubtitleCandidate] = []
+        for keyword in self._keywords(movie):
+            payload = await self._request_json(
+                "/sub/search",
+                {"q": keyword, "cnt": 15, "pos": 0, "filelist": 1},
+            )
+            subs = payload.get("sub", {}).get("subs") or []
+            mapped = [self._map_item(raw, movie, keyword) for raw in subs]
+            result.extend([item for item in mapped if item.provider_subtitle_id])
+            if result:
+                break
+        return result
+
+    def _map_item(self, raw: dict, movie: MovieInfo, keyword: str) -> SubtitleCandidate:
+        filelist = raw.get("filelist") or []
+        file_names = [raw.get("filename"), *[item.get("f") for item in filelist if isinstance(item, dict)]]
+        file_names = [item for item in file_names if item]
+        language = chinese_language_label((raw.get("lang") or {}).get("desc") or "")
+        text = " ".join(
+            str(part)
+            for part in [
+                raw.get("native_name"),
+                raw.get("videoname"),
+                raw.get("title"),
+                raw.get("filename"),
+                raw.get("subtype"),
+                raw.get("release_site"),
+                (raw.get("lang") or {}).get("desc"),
+                *file_names,
+            ]
+            if part
+        )
+        subtitle_format = detect_subtitle_format(" ".join(file_names)) or detect_subtitle_format(text)
+        return SubtitleCandidate(
+            provider=self.id,
+            provider_subtitle_id=str(raw.get("id") or ""),
+            movie_id=movie.movie_id,
+            movie_title=movie.title,
+            movie_original_title=movie.original_title,
+            movie_title_zh=movie.title_zh,
+            movie_year=movie.year,
+            subtitle_title=raw.get("title") or raw.get("native_name") or raw.get("filename") or "",
+            language_type=language,
+            subtitle_format=subtitle_format,
+            download_count=int(raw.get("down_count") or raw.get("download_count") or 0),
+            detail_url=f"https://assrt.net/xml/sub/{raw.get('id')}" if raw.get("id") else "",
+            description=format_chinese_description(
+                ("搜索关键词", keyword),
+                ("字幕标题", raw.get("title") or raw.get("native_name") or raw.get("filename")),
+                ("视频名称", raw.get("videoname")),
+                ("字幕类型", raw.get("subtype")),
+                ("发布站点", raw.get("release_site")),
+                ("语言", language),
+                ("格式", subtitle_format),
+                ("文件名", file_names),
+            ),
+            file_names=file_names,
+            raw=raw,
+        )
+
+    async def download(self, candidate: SubtitleCandidate, context: DownloadContext) -> list[DownloadedPayload]:
+        if not self.token:
+            raise CollectorError("缺少 ASSRT_TOKEN", ErrorType.PROVIDER_DISABLED, self.id)
+        detail = await self._request_json("/sub/detail", {"id": candidate.provider_subtitle_id})
+        subs = detail.get("sub", {}).get("subs") or []
+        if not subs:
+            raise CollectorError("ASSRT 明细接口没有返回字幕信息", ErrorType.DOWNLOAD_FAILED, self.id)
+        sub_detail = subs[0]
+        filelist = [item for item in (sub_detail.get("filelist") or []) if isinstance(item, dict)]
+        download_url = ""
+        file_name = sub_detail.get("filename") or sub_detail.get("title") or "subtitle"
+        for item in filelist:
+            if item.get("url") and detect_subtitle_format(item.get("f", "")) in {"ass", "srt"}:
+                download_url = item["url"]
+                file_name = item.get("f") or file_name
+                break
+        if not download_url:
+            download_url = sub_detail.get("url") or ""
+        if not download_url:
+            raise CollectorError("ASSRT 明细接口没有返回下载链接", ErrorType.DOWNLOAD_FAILED, self.id)
+
+        await self._rate_limit()
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            response = await client.get(
+                urljoin(self.base_url, download_url),
+                headers={
+                    "Accept": "application/zip,application/octet-stream,text/plain,*/*",
+                    "User-Agent": "subtitleInfoCollection/0.1",
+                    "Referer": "https://assrt.net/",
+                },
+            )
+            response.raise_for_status()
+            return [
+                DownloadedPayload(
+                    file_name=file_name,
+                    content=response.content,
+                    source_url=str(response.url),
+                    content_type=response.headers.get("content-type", ""),
+                )
+            ]

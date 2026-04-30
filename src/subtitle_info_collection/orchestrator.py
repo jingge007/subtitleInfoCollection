@@ -1,0 +1,489 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Callable
+
+from .adapters.assrt import AssrtProvider
+from .adapters.base import DownloadContext, ProviderAdapter, ProviderHealth, RequestVerificationCallback
+from .adapters.opensubtitles import OpenSubtitlesProvider
+from .adapters.subhd import SubhdProvider
+from .adapters.tmdb import TmdbClient
+from .engines.archives import create_zip_package, safe_filename, save_downloaded_payloads
+from .engines.scorer import score_candidate, sort_candidates
+from .engines.subtitle_engine import validate_candidate_metadata
+from .errors import CollectorError, ErrorType, classify_exception
+from .models import (
+    DownloadResult,
+    FailedRecord,
+    MovieInfo,
+    SubtitleCandidate,
+    TaskConfig,
+    now_iso,
+)
+from .storage import AppStorage
+
+LogCallback = Callable[[str], None]
+ProgressCallback = Callable[[dict[str, object]], None]
+
+
+@dataclass(slots=True)
+class RunPaths:
+    output_dir: Path
+    movies_path: Path
+    all_path: Path
+    best_path: Path
+    failed_path: Path
+    download_dir: Path
+    package_name: str
+    package_path: Path
+
+
+def timestamp_tag(value: datetime | None = None) -> str:
+    date = value or datetime.now()
+    return date.strftime("%Y%m%d%H%M%S")
+
+
+def get_run_paths(output_root: Path, year: int, limit: int, started_at: datetime | None = None) -> RunPaths:
+    stamp = timestamp_tag(started_at)
+    top_tag = f"top{limit}"
+    output_dir = output_root / f"{stamp}-{year}-{top_tag}"
+    package_name = f"subtitles-{stamp}.zip"
+    return RunPaths(
+        output_dir=output_dir,
+        movies_path=output_dir / f"movies-{year}-{top_tag}.json",
+        all_path=output_dir / f"subtitles-{year}-{top_tag}-all.json",
+        best_path=output_dir / f"subtitles-{year}-{top_tag}-best.json",
+        failed_path=output_dir / f"subtitles-{year}-{top_tag}-failed.json",
+        download_dir=output_dir / "subtitles",
+        package_name=package_name,
+        package_path=output_dir / package_name,
+    )
+
+
+def write_json(path: Path, data: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def create_provider_registry(config: TaskConfig) -> dict[str, ProviderAdapter]:
+    return {
+        "subhd": SubhdProvider(),
+        "assrt": AssrtProvider(
+            token=config.assrt_token,
+            base_url=config.assrt_api_base_url,
+            request_interval_ms=config.request_interval_ms,
+        ),
+        "opensubtitles": OpenSubtitlesProvider(
+            api_key=config.opensubtitles_api_key,
+            username=config.opensubtitles_username,
+            password=config.opensubtitles_password,
+            base_url=config.opensubtitles_base_url,
+            user_agent=config.opensubtitles_user_agent,
+        ),
+    }
+
+
+def select_providers(config: TaskConfig, registry: dict[str, ProviderAdapter]) -> list[ProviderAdapter]:
+    disabled = set(config.provider_disabled)
+    requested = set(config.subtitle_providers or registry.keys())
+    ordered_ids = []
+    for provider_id in [*config.provider_priority, *config.subtitle_providers, *registry.keys()]:
+        if provider_id not in ordered_ids:
+            ordered_ids.append(provider_id)
+    return [
+        registry[provider_id]
+        for provider_id in ordered_ids
+        if provider_id in requested and provider_id not in disabled and provider_id in registry
+    ]
+
+
+def create_provider_stats(providers: list[ProviderAdapter]) -> dict[str, dict[str, object]]:
+    return {
+        provider.id: {
+            "provider": provider.id,
+            "searchCount": 0,
+            "hitCount": 0,
+            "noMatchCount": 0,
+            "errorCount": 0,
+            "filteredCount": 0,
+            "downloadCount": 0,
+            "lastError": "",
+            "lastErrorType": "",
+        }
+        for provider in providers
+    }
+
+
+class SubtitleCollectionOrchestrator:
+    def __init__(
+        self,
+        storage: AppStorage | None = None,
+        log: LogCallback | None = None,
+        progress: ProgressCallback | None = None,
+        request_verification: RequestVerificationCallback | None = None,
+    ) -> None:
+        self.storage = storage
+        self.log = log or (lambda message: None)
+        self.progress = progress or (lambda payload: None)
+        self.request_verification = request_verification
+        self._last_provider_request_at = 0.0
+
+    async def run(self, config: TaskConfig) -> dict[str, object]:
+        started_at = datetime.now()
+        output_root = (config.output_root or Path.cwd() / "output").resolve()
+        paths = get_run_paths(output_root, config.year, config.limit, started_at)
+        paths.output_dir.mkdir(parents=True, exist_ok=True)
+        paths.download_dir.mkdir(parents=True, exist_ok=True)
+        run_id = self.storage.create_task_run(config.year, config.limit) if self.storage else 0
+
+        registry = create_provider_registry(config)
+        providers = select_providers(config, registry)
+        provider_stats = create_provider_stats(providers)
+        failed_records: list[FailedRecord] = []
+        all_candidates: list[SubtitleCandidate] = []
+        best_candidates: list[SubtitleCandidate] = []
+        download_results: list[DownloadResult] = []
+        source_health = await self._get_source_health(providers)
+        active_providers = [
+            provider
+            for provider in providers
+            if source_health.get(provider.id, {}).get("enabled")
+            and source_health.get(provider.id, {}).get("healthy")
+        ]
+
+        try:
+            self.log(
+                f"任务开始：{config.year} 年 Top{config.limit}，字幕源 "
+                f"{', '.join(provider.id for provider in providers) or '无'}"
+            )
+            movies = await self._resolve_movies(config)
+            for movie in movies:
+                self.storage and self.storage.save_movie(movie)
+            write_json(paths.movies_path, [movie.to_export_dict() for movie in movies])
+            self.log(f"电影列表数量：{len(movies)}")
+
+            if not active_providers:
+                failed_records.append(
+                    FailedRecord(
+                        movie=None,
+                        movie_name="-",
+                        provider="-",
+                        error_type=ErrorType.PROVIDER_DISABLED,
+                        error="没有启用的字幕源",
+                    )
+                )
+
+            for index, movie in enumerate(movies, start=1):
+                movie_name = movie.display_title
+                self.progress({"current": index, "total": len(movies), "currentMovie": movie_name})
+                self.log(f"[{index}/{len(movies)}] 采集：{movie_name}")
+
+                candidates = await self._collect_movie_candidates(
+                    movie=movie,
+                    providers=active_providers,
+                    config=config,
+                    stats=provider_stats,
+                    failed_records=failed_records,
+                )
+                if not candidates:
+                    failed_records.append(
+                        FailedRecord(
+                            movie=movie,
+                            movie_name=movie_name,
+                            provider=",".join(provider.id for provider in active_providers),
+                            error_type=ErrorType.NO_MATCH,
+                            error="没有找到符合要求的双语 ass/srt 字幕候选",
+                        )
+                    )
+                    self._write_incremental(paths, all_candidates, best_candidates, failed_records)
+                    continue
+
+                sorted_candidates = sort_candidates(candidates)
+                best = sorted_candidates[0]
+                best_candidates.append(best)
+                all_candidates.extend(sorted_candidates)
+                self.storage and [self.storage.save_candidate(item) for item in sorted_candidates]
+                self.log(f"命中 {len(sorted_candidates)} 条，推荐：{best.provider}/{best.subtitle_title}")
+
+                if config.download_enabled:
+                    await self._download_best(
+                        best=best,
+                        providers=active_providers,
+                        config=config,
+                        paths=paths,
+                        stats=provider_stats,
+                        failed_records=failed_records,
+                        download_results=download_results,
+                    )
+                self._write_incremental(paths, all_candidates, best_candidates, failed_records)
+
+            package_path = create_zip_package(
+                [path for result in download_results for path in result.saved_paths],
+                paths.package_path,
+                paths.download_dir,
+            )
+            result = self._build_result(
+                config=config,
+                paths=paths,
+                started_at=started_at,
+                movies=movies,
+                all_candidates=all_candidates,
+                best_candidates=best_candidates,
+                failed_records=failed_records,
+                download_results=download_results,
+                source_health=source_health,
+                provider_stats=provider_stats,
+                package_path=package_path,
+            )
+            self._write_incremental(paths, all_candidates, best_candidates, failed_records)
+            self.storage and self.storage.finish_task_run(run_id, "completed", result)
+            self.log("字幕采集任务完成")
+            return result
+        except Exception as exc:
+            result = {
+                "year": config.year,
+                "limit": config.limit,
+                "finishedAt": now_iso(),
+                "errorType": classify_exception(exc),
+                "error": str(exc),
+            }
+            self.storage and self.storage.finish_task_run(run_id, "failed", result)
+            raise
+
+    async def _resolve_movies(self, config: TaskConfig) -> list[MovieInfo]:
+        if config.movie_source == "manual":
+            return config.manual_movies[: config.limit]
+        if config.movie_source == "backend":
+            raise CollectorError("后端电影源已保留但未配置", ErrorType.PROVIDER_DISABLED)
+        client = TmdbClient(config.tmdb_token)
+        return await client.fetch_top_movies(
+            config.year,
+            config.limit,
+            vote_count_min=config.vote_count_min,
+            log=self.log,
+        )
+
+    async def _get_source_health(self, providers: list[ProviderAdapter]) -> dict[str, dict[str, object]]:
+        result: dict[str, dict[str, object]] = {}
+        for provider in providers:
+            try:
+                health: ProviderHealth = await provider.health()
+                result[provider.id] = health.to_dict()
+            except Exception as exc:  # noqa: BLE001
+                result[provider.id] = ProviderHealth(
+                    provider.id,
+                    enabled=True,
+                    healthy=False,
+                    error_type=classify_exception(exc),
+                    message=str(exc),
+                ).to_dict()
+        return result
+
+    async def _respect_rate_limit(self, interval_ms: int) -> None:
+        now = asyncio.get_running_loop().time()
+        elapsed_ms = (now - self._last_provider_request_at) * 1000
+        remaining_ms = interval_ms - elapsed_ms
+        if self._last_provider_request_at and remaining_ms > 0:
+            await asyncio.sleep(remaining_ms / 1000)
+        self._last_provider_request_at = asyncio.get_running_loop().time()
+
+    async def _collect_movie_candidates(
+        self,
+        movie: MovieInfo,
+        providers: list[ProviderAdapter],
+        config: TaskConfig,
+        stats: dict[str, dict[str, object]],
+        failed_records: list[FailedRecord],
+    ) -> list[SubtitleCandidate]:
+        valid_candidates: list[SubtitleCandidate] = []
+        for provider in providers:
+            provider_stats = stats[provider.id]
+            provider_stats["searchCount"] = int(provider_stats["searchCount"]) + 1
+            try:
+                await self._respect_rate_limit(config.request_interval_ms)
+                raw_candidates = await provider.search(movie)
+                provider_valid: list[SubtitleCandidate] = []
+                for candidate in raw_candidates:
+                    validation = validate_candidate_metadata(candidate)
+                    if not validation.valid:
+                        provider_stats["filteredCount"] = int(provider_stats["filteredCount"]) + 1
+                        failed_records.append(
+                            FailedRecord(
+                                movie=movie,
+                                movie_name=movie.display_title,
+                                provider=provider.id,
+                                error_type=validation.error_type,
+                                error=validation.reason,
+                                subtitle_title=candidate.subtitle_title,
+                                provider_subtitle_id=candidate.provider_subtitle_id,
+                            )
+                        )
+                        continue
+                    candidate.subtitle_format = validation.subtitle_format
+                    provider_valid.append(score_candidate(candidate, movie))
+
+                if provider_valid:
+                    provider_stats["hitCount"] = int(provider_stats["hitCount"]) + len(provider_valid)
+                    valid_candidates.extend(provider_valid)
+                    if not config.fallback_enabled:
+                        break
+                else:
+                    provider_stats["noMatchCount"] = int(provider_stats["noMatchCount"]) + 1
+            except Exception as exc:  # noqa: BLE001
+                error_type = classify_exception(exc)
+                provider_stats["errorCount"] = int(provider_stats["errorCount"]) + 1
+                provider_stats["lastError"] = str(exc)
+                provider_stats["lastErrorType"] = error_type
+                failed_records.append(
+                    FailedRecord(
+                        movie=movie,
+                        movie_name=movie.display_title,
+                        provider=provider.id,
+                        error_type=error_type,
+                        error=str(exc),
+                    )
+                )
+        return valid_candidates
+
+    async def _download_best(
+        self,
+        best: SubtitleCandidate,
+        providers: list[ProviderAdapter],
+        config: TaskConfig,
+        paths: RunPaths,
+        stats: dict[str, dict[str, object]],
+        failed_records: list[FailedRecord],
+        download_results: list[DownloadResult],
+    ) -> None:
+        provider = next((item for item in providers if item.id == best.provider), None)
+        if not provider:
+            failed_records.append(
+                FailedRecord(
+                    movie=None,
+                    movie_name=best.movie_title_zh or best.movie_title,
+                    provider=best.provider,
+                    error_type=ErrorType.PROVIDER_DISABLED,
+                    error="字幕源不可用",
+                    subtitle_title=best.subtitle_title,
+                    provider_subtitle_id=best.provider_subtitle_id,
+                )
+            )
+            return
+        try:
+            payloads = await provider.download(
+                best,
+                DownloadContext(
+                    request_interval_ms=config.request_interval_ms,
+                    request_verification=self.request_verification,
+                    log=self.log,
+                ),
+            )
+            base_name = safe_filename(best.movie_title_zh or best.movie_title or best.provider_subtitle_id)
+            saved_paths = save_downloaded_payloads(payloads, paths.download_dir, base_name, best)
+            stats[best.provider]["downloadCount"] = int(stats[best.provider]["downloadCount"]) + len(saved_paths)
+            download_results.append(
+                DownloadResult(
+                    provider=best.provider,
+                    provider_subtitle_id=best.provider_subtitle_id,
+                    subtitle_title=best.subtitle_title,
+                    movie_title=best.movie_title_zh or best.movie_title,
+                    saved_paths=saved_paths,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed_records.append(
+                FailedRecord(
+                    movie=None,
+                    movie_name=best.movie_title_zh or best.movie_title,
+                    provider=best.provider,
+                    error_type=classify_exception(exc),
+                    error=str(exc),
+                    subtitle_title=best.subtitle_title,
+                    provider_subtitle_id=best.provider_subtitle_id,
+                )
+            )
+
+    def _write_incremental(
+        self,
+        paths: RunPaths,
+        all_candidates: list[SubtitleCandidate],
+        best_candidates: list[SubtitleCandidate],
+        failed_records: list[FailedRecord],
+    ) -> None:
+        write_json(paths.all_path, [item.to_export_dict() for item in all_candidates])
+        best_ids = {(item.provider, item.provider_subtitle_id, item.movie_id) for item in best_candidates}
+        write_json(
+            paths.best_path,
+            [
+                item.to_export_dict(
+                    (item.provider, item.provider_subtitle_id, item.movie_id) in best_ids
+                )
+                for item in best_candidates
+            ],
+        )
+        write_json(paths.failed_path, [item.to_export_dict() for item in failed_records])
+
+    def _build_result(
+        self,
+        config: TaskConfig,
+        paths: RunPaths,
+        started_at: datetime,
+        movies: list[MovieInfo],
+        all_candidates: list[SubtitleCandidate],
+        best_candidates: list[SubtitleCandidate],
+        failed_records: list[FailedRecord],
+        download_results: list[DownloadResult],
+        source_health: dict[str, dict[str, object]],
+        provider_stats: dict[str, dict[str, object]],
+        package_path: Path | None,
+    ) -> dict[str, object]:
+        downloadable = []
+        for result_index, result in enumerate(download_results, start=1):
+            for file_index, path in enumerate(result.saved_paths, start=1):
+                downloadable.append(
+                    {
+                        "key": f"subtitle-{result_index}-{file_index}",
+                        "movieTitle": result.movie_title,
+                        "provider": result.provider,
+                        "providerSubtitleId": result.provider_subtitle_id,
+                        "subtitleTitle": result.subtitle_title,
+                        "fileName": path.name,
+                        "format": path.suffix.lstrip(".").lower(),
+                        "size": path.stat().st_size if path.exists() else 0,
+                    }
+                )
+
+        return {
+            "year": config.year,
+            "limit": config.limit,
+            "movieSource": config.movie_source,
+            "provider": ",".join(config.subtitle_providers),
+            "providers": config.subtitle_providers,
+            "requestIntervalMs": config.request_interval_ms,
+            "fallbackEnabled": config.fallback_enabled,
+            "downloadEnabled": config.download_enabled,
+            "startedAt": started_at.replace(microsecond=0).isoformat(),
+            "finishedAt": now_iso(),
+            "movieCount": len(movies),
+            "subtitleCount": len(all_candidates),
+            "bestCount": len(best_candidates),
+            "failedCount": len(failed_records),
+            "downloadCount": len(download_results),
+            "moviesPath": str(paths.movies_path),
+            "allPath": str(paths.all_path),
+            "bestPath": str(paths.best_path),
+            "failedPath": str(paths.failed_path),
+            "subtitlePackageName": paths.package_name if package_path else "",
+            "subtitlePackagePath": str(package_path) if package_path else "",
+            "sourceHealth": source_health,
+            "providerStats": provider_stats,
+            "movies": [movie.to_export_dict() for movie in movies],
+            "failedRecords": [record.to_export_dict() for record in failed_records],
+            "latestRecords": [item.to_export_dict(is_best=True) for item in best_candidates],
+            "downloadableSubtitles": downloadable,
+            "downloadResults": [result.to_export_dict() for result in download_results],
+        }

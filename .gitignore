@@ -1,0 +1,43 @@
+# Local environment
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Packaging and build outputs
+build/
+dist/
+*.egg-info/
+*.spec
+
+# Application data and generated outputs
+subtitle_info_collection.sqlite3
+*.sqlite3
+output/
+parsed/
+subtitleInfoCollection/
+
+# Playwright / browser artifacts
+playwright-report/
+test-results/
+
+# IDE and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
