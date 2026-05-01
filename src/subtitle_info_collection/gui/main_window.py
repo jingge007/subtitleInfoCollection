@@ -10,7 +10,6 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QCheckBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -19,20 +18,32 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
-    QProgressBar,
     QSizePolicy,
-    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
+)
+from qfluentwidgets import (
+    CheckBox,
+    FluentIcon as FIF,
+    InfoBar,
+    InfoBarPosition,
+    LineEdit,
+    MessageBox,
+    PrimaryPushButton,
+    ProgressBar,
+    PushButton,
+    SearchLineEdit,
+    SpinBox,
+    StrongBodyLabel,
+    SubtitleLabel,
+    TextEdit,
+    TransparentToolButton,
 )
 
 from ..config import AppSettings, bootstrap_env_file, evaluate_config
@@ -48,8 +59,8 @@ LINE = "#D1D9E0"
 LINE_SOFT = "#E4E9EF"
 LINE_HOVER = "#B0BCCA"
 TEXT = "#1A1D23"
-TEXT_MUTED = "#5A6272"
-TEXT_SOFT = "#8B95A5"
+TEXT_MUTED = "#3D4552"
+TEXT_SOFT = "#5A6478"
 PRIMARY = "#4F6EF7"
 PRIMARY_SOFT = "#EEF1FE"
 PRIMARY_DARK = "#3B54D4"
@@ -79,12 +90,12 @@ class MainWindow(QMainWindow):
         self.task_summary: dict = {}
         self.collector_worker: CollectorWorker | None = None
         self.parser_worker: ParserWorker | None = None
-        self.nav_buttons: list[QPushButton] = []
+        self.nav_buttons: list[PushButton] = []
 
         self.setWindowTitle("字幕采集工具")
         self.resize(1320, 840)
         self._set_app_icon()
-        self._apply_style()
+        self._apply_fluent_theme()
 
         self.setCentralWidget(self._build_shell())
         self.refresh_history()
@@ -97,10 +108,10 @@ class MainWindow(QMainWindow):
 
         candidates: list[Path] = []
         if getattr(_sys, "frozen", False):
-            candidates.append(Path(_sys.executable).parent / "assets" / "head_logo.ico")
-            candidates.append(Path(_sys.executable).parent / "_internal" / "assets" / "head_logo.ico")
+            candidates.append(Path(_sys.executable).parent / "assets" / "head_logo.png")
+            candidates.append(Path(_sys.executable).parent / "_internal" / "assets" / "head_logo.png")
         else:
-            candidates.append(Path(__file__).resolve().parents[3] / "assets" / "head_logo.ico")
+            candidates.append(Path(__file__).resolve().parents[3] / "assets" / "head_logo.png")
         for icon_path in candidates:
             if icon_path.exists():
                 self.setWindowIcon(QIcon(str(icon_path)))
@@ -108,406 +119,10 @@ class MainWindow(QMainWindow):
 
     # ── Global Stylesheet ─────────────────────────────────────────────
 
-    def _apply_style(self) -> None:
-        self.setStyleSheet(f"""
-            * {{
-                font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
-                font-size: 13px;
-                color: {TEXT};
-            }}
-            QMainWindow {{
-                background: {PAGE_BG};
-            }}
-
-            /* ── Sidebar ── */
-            QFrame#sidebar {{
-                background: {SURFACE};
-                border-right: 1px solid {LINE};
-            }}
-            QLabel#brandTitle {{
-                color: {PRIMARY};
-                font-size: 20px;
-                font-weight: 800;
-            }}
-            QLabel#brandSubtitle {{
-                color: {TEXT_MUTED};
-                font-size: 12px;
-            }}
-            QFrame#sidebarDivider {{
-                background: {LINE_SOFT};
-                max-height: 1px;
-                min-height: 1px;
-            }}
-            QPushButton#navButton {{
-                background: transparent;
-                color: {TEXT};
-                border: none;
-                border-radius: 8px;
-                padding: 10px 14px;
-                text-align: left;
-                font-weight: 500;
-                font-size: 13px;
-            }}
-            QPushButton#navButton:hover {{
-                background: {SURFACE_ALT};
-                color: {TEXT};
-            }}
-            QPushButton#navButton:checked {{
-                background: {PRIMARY_SOFT};
-                color: {PRIMARY_DARK};
-                font-weight: 700;
-                border-left: 3px solid {PRIMARY};
-                padding-left: 11px;
-            }}
-            QLabel#sidebarHint {{
-                color: {TEXT_SOFT};
-                font-size: 11px;
-            }}
-
-            /* ── Page titles ── */
-            QLabel#pageTitle {{
-                color: {TEXT};
-                font-size: 24px;
-                font-weight: 800;
-            }}
-            QLabel#sectionTitle {{
-                color: {TEXT};
-                font-size: 15px;
-                font-weight: 700;
-            }}
-            QLabel#mutedText {{
-                color: {TEXT_MUTED};
-                font-size: 13px;
-            }}
-            QLabel#metricValue {{
-                color: {TEXT};
-                font-size: 24px;
-                font-weight: 800;
-            }}
-            QLabel#metricLabel {{
-                color: {TEXT_MUTED};
-                font-size: 12px;
-            }}
-            QLabel#badgeGreen {{
-                background: {GREEN_SOFT};
-                color: {GREEN};
-                border-radius: 8px;
-                padding: 4px 12px;
-                font-size: 12px;
-                font-weight: 700;
-            }}
-            QLabel#badgeOrange {{
-                background: {ORANGE_SOFT};
-                color: {ORANGE};
-                border-radius: 8px;
-                padding: 4px 12px;
-                font-size: 12px;
-                font-weight: 700;
-            }}
-            QLabel#badgeRed {{
-                background: {RED_SOFT};
-                color: {RED};
-                border-radius: 8px;
-                padding: 4px 12px;
-                font-size: 12px;
-                font-weight: 700;
-            }}
-            QLabel#badgeBlue {{
-                background: {PRIMARY_SOFT};
-                color: {PRIMARY};
-                border-radius: 8px;
-                padding: 4px 12px;
-                font-size: 12px;
-                font-weight: 700;
-            }}
-            QLabel#badgeGray {{
-                background: {SURFACE_ALT};
-                color: {TEXT_MUTED};
-                border-radius: 8px;
-                padding: 4px 12px;
-                font-size: 12px;
-                font-weight: 700;
-            }}
-
-            /* ── Panels & Cards ── */
-            QFrame#panel, QFrame#metricCard, QFrame#statusCard, QFrame#recordCard, QGroupBox {{
-                background: {SURFACE};
-                border: 1px solid {LINE};
-                border-radius: 10px;
-            }}
-            QFrame#dangerZone {{
-                background: {DANGER_BG};
-                border: 1px solid {DANGER_BORDER};
-                border-radius: 10px;
-            }}
-
-            /* ── GroupBox ── */
-            QGroupBox {{
-                margin-top: 18px;
-                padding: 16px 14px 14px;
-                font-weight: 700;
-                font-size: 13px;
-                color: {TEXT};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 14px;
-                padding: 0 8px;
-                color: {PRIMARY};
-            }}
-
-            /* ── Inputs ── */
-            QLineEdit, QSpinBox, QTextEdit, QTextBrowser {{
-                background: {SURFACE};
-                border: 1px solid {LINE};
-                border-radius: 8px;
-                color: {TEXT};
-                font-size: 13px;
-            }}
-            QLineEdit:hover, QSpinBox:hover {{
-                border-color: {LINE_HOVER};
-            }}
-            QLineEdit:focus, QSpinBox:focus {{
-                border-color: {PRIMARY};
-                border-width: 2px;
-                padding: 2px 7px;
-            }}
-            QLineEdit, QSpinBox {{
-                min-height: 32px;
-                padding: 4px 10px;
-                font-size: 13px;
-            }}
-            QSpinBox::up-button {{
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                width: 28px;
-                min-height: 14px;
-                border-left: 1px solid {LINE};
-                border-bottom: 1px solid {LINE};
-                border-top-right-radius: 7px;
-                background: {SURFACE_ALT};
-            }}
-            QSpinBox::up-button:hover {{
-                background: {PRIMARY_SOFT};
-            }}
-            QSpinBox::up-button:pressed {{
-                background: {PRIMARY};
-            }}
-            QSpinBox::down-button {{
-                subcontrol-origin: border;
-                subcontrol-position: bottom right;
-                width: 28px;
-                min-height: 14px;
-                border-left: 1px solid {LINE};
-                border-bottom-right-radius: 7px;
-                background: {SURFACE_ALT};
-            }}
-            QSpinBox::down-button:hover {{
-                background: {PRIMARY_SOFT};
-            }}
-            QSpinBox::down-button:pressed {{
-                background: {PRIMARY};
-            }}
-            QSpinBox::up-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-bottom: 6px solid {TEXT_MUTED};
-                width: 0px;
-                height: 0px;
-            }}
-            QSpinBox::up-arrow:hover {{
-                border-bottom-color: {PRIMARY};
-            }}
-            QSpinBox::down-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid {TEXT_MUTED};
-                width: 0px;
-                height: 0px;
-            }}
-            QSpinBox::down-arrow:hover {{
-                border-top-color: {PRIMARY};
-            }}
-
-            /* ── CheckBox ── */
-            QCheckBox {{
-                spacing: 10px;
-                color: {TEXT};
-                font-weight: 500;
-                font-size: 13px;
-                min-height: 24px;
-            }}
-            QCheckBox::indicator {{
-                width: 22px;
-                height: 22px;
-                border-radius: 6px;
-                border: 2px solid {LINE};
-                background: {SURFACE};
-            }}
-            QCheckBox::indicator:hover {{
-                border-color: {PRIMARY_LIGHT};
-                background: {PRIMARY_SOFT};
-            }}
-            QCheckBox::indicator:checked {{
-                background: {PRIMARY};
-                border-color: {PRIMARY};
-            }}
-            QCheckBox::indicator:checked:hover {{
-                background: {PRIMARY_DARK};
-                border-color: {PRIMARY_DARK};
-            }}
-
-            /* ── Buttons ── */
-            QPushButton {{
-                background: {PRIMARY};
-                color: #FFFFFF;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 18px;
-                font-weight: 600;
-                font-size: 13px;
-            }}
-            QPushButton:hover {{
-                background: {PRIMARY_DARK};
-            }}
-            QPushButton:pressed {{
-                background: #2E46C0;
-            }}
-            QPushButton:disabled {{
-                background: #C8CDD8;
-                color: #F5F6F8;
-            }}
-            QPushButton#secondaryButton {{
-                background: {SURFACE};
-                color: {TEXT};
-                border: 1px solid {LINE};
-            }}
-            QPushButton#secondaryButton:hover {{
-                background: {SURFACE_ALT};
-                border-color: {LINE_HOVER};
-            }}
-            QPushButton#secondaryButton:pressed {{
-                background: #E4E9EF;
-            }}
-            QPushButton#ghostButton {{
-                background: transparent;
-                color: {TEXT_MUTED};
-                border: 1px solid {LINE_SOFT};
-            }}
-            QPushButton#ghostButton:hover {{
-                background: {SURFACE_ALT};
-                color: {TEXT};
-                border-color: {LINE};
-            }}
-            QPushButton#dangerButton {{
-                background: {RED};
-            }}
-            QPushButton#dangerButton:hover {{
-                background: #C53030;
-            }}
-            QPushButton#dangerButton:pressed {{
-                background: #9B2020;
-            }}
-
-            /* ── ProgressBar ── */
-            QProgressBar {{
-                border: 1px solid {LINE};
-                border-radius: 10px;
-                background: {SURFACE_ALT};
-                text-align: center;
-                height: 22px;
-                font-size: 11px;
-                color: {TEXT};
-                font-weight: 600;
-            }}
-            QProgressBar::chunk {{
-                border-radius: 9px;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {PRIMARY}, stop:1 {PRIMARY_LIGHT});
-            }}
-
-            /* ── Tables ── */
-            QHeaderView::section {{
-                background: {SURFACE_ALT};
-                border: none;
-                border-bottom: 2px solid {LINE};
-                padding: 9px 12px;
-                font-weight: 700;
-                font-size: 12px;
-                color: {TEXT};
-            }}
-            QTableWidget {{
-                background: {SURFACE};
-                gridline-color: {LINE_SOFT};
-                alternate-background-color: {SURFACE_ALT};
-                outline: 0;
-                border: none;
-                font-size: 12px;
-                color: {TEXT};
-            }}
-            QTableWidget#dataTable {{
-                selection-background-color: {PRIMARY_SOFT};
-                selection-color: {TEXT};
-            }}
-
-            /* ── Log Panel ── */
-            QTextEdit#logPanel {{
-                background: {LOG_BG};
-                border: 1px solid #21262D;
-                border-radius: 8px;
-                color: {LOG_TEXT};
-                font-family: "Cascadia Code", "JetBrains Mono", "Consolas", monospace;
-                font-size: 12px;
-                padding: 6px;
-            }}
-
-            /* ── ScrollBar ── */
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 8px;
-                margin: 0;
-            }}
-            QScrollBar::handle:vertical {{
-                background: #C8CDD8;
-                border-radius: 4px;
-                min-height: 30px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: #A0A8B8;
-            }}
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {{
-                background: transparent;
-            }}
-
-            QScrollBar:horizontal {{
-                background: transparent;
-                height: 8px;
-                margin: 0;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: #C8CDD8;
-                border-radius: 4px;
-                min-width: 30px;
-            }}
-            QScrollBar::handle:horizontal:hover {{
-                background: #A0A8B8;
-            }}
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {{
-                width: 0px;
-            }}
-            QScrollBar::add-page:horizontal,
-            QScrollBar::sub-page:horizontal {{
-                background: transparent;
-            }}
-        """)
+    def _apply_fluent_theme(self) -> None:
+        from qfluentwidgets import setTheme, Theme, setThemeColor
+        setTheme(Theme.LIGHT)
+        setThemeColor("#4F6EF7")
 
     # ── Shell (Sidebar + Stack) ──────────────────────────────────────
 
@@ -524,17 +139,6 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(18, 22, 18, 18)
         sidebar_layout.setSpacing(6)
 
-        brand = QLabel("字幕采集工具")
-        brand.setObjectName("brandTitle")
-        brand_subtitle = QLabel("专业数据运维台")
-        brand_subtitle.setObjectName("brandSubtitle")
-        sidebar_layout.addWidget(brand)
-        sidebar_layout.addWidget(brand_subtitle)
-        sidebar_layout.addSpacing(14)
-
-        divider = QFrame()
-        divider.setObjectName("sidebarDivider")
-        sidebar_layout.addWidget(divider)
         sidebar_layout.addSpacing(8)
 
         nav_items = [
@@ -545,11 +149,10 @@ class MainWindow(QMainWindow):
             ("设置与维护", self._build_settings_tab),
         ]
         self.stack = QStackedWidget()
-        self.stack.setStyleSheet(f"QStackedWidget {{ background: {PAGE_BG}; }}")
         for index, (title, _) in enumerate(nav_items):
-            button = QPushButton(title)
-            button.setObjectName("navButton")
+            button = PushButton(title)
             button.setCheckable(True)
+            button.setFixedHeight(40)
             button.clicked.connect(lambda checked=False, page_index=index: self.switch_page(page_index))
             self.nav_buttons.append(button)
             sidebar_layout.addWidget(button)
@@ -557,7 +160,7 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(builder())
         sidebar_layout.addStretch(1)
         hint = QLabel("密钥仅从本机 .env 读取")
-        hint.setObjectName("sidebarHint")
+        hint.setStyleSheet("color: #8B95A5; font-size: 11px;")
         hint.setWordWrap(True)
         sidebar_layout.addWidget(hint)
 
@@ -580,7 +183,6 @@ class MainWindow(QMainWindow):
 
     def _build_task_center_page(self) -> QWidget:
         page = QWidget()
-        page.setStyleSheet(f"QWidget {{ background: {PAGE_BG}; }}")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
@@ -589,10 +191,9 @@ class MainWindow(QMainWindow):
         header.setSpacing(12)
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
-        self.dashboard_title = QLabel("任务工作台")
-        self.dashboard_title.setObjectName("pageTitle")
+        self.dashboard_title = SubtitleLabel("任务工作台")
         subtitle = QLabel("集中查看配置状态、近期任务、输出位置和常用操作。")
-        subtitle.setObjectName("mutedText")
+        subtitle.setStyleSheet("color: #8B95A5; font-size: 13px;")
         subtitle.setWordWrap(True)
         title_col.addWidget(self.dashboard_title)
         title_col.addWidget(subtitle)
@@ -602,10 +203,9 @@ class MainWindow(QMainWindow):
         header_right.setSpacing(8)
         self.dashboard_ready_label = QLabel()
         header_right.addWidget(self.dashboard_ready_label)
-        start_button = QPushButton("开始采集")
+        start_button = PrimaryPushButton("开始采集", icon=FIF.PLAY)
         start_button.clicked.connect(lambda: self.switch_page(1))
-        parse_button = QPushButton("解析本地字幕")
-        parse_button.setObjectName("secondaryButton")
+        parse_button = PushButton("解析本地字幕", icon=FIF.DOCUMENT)
         parse_button.clicked.connect(lambda: self.switch_page(2))
         header_right.addWidget(start_button)
         header_right.addWidget(parse_button)
@@ -654,20 +254,17 @@ class MainWindow(QMainWindow):
 
         output_panel = self._panel("输出与维护")
         self.latest_output_label = QLabel("暂无输出")
-        self.latest_output_label.setObjectName("mutedText")
+        self.latest_output_label.setStyleSheet("color: #8B95A5; font-size: 13px;")
         self.latest_output_label.setWordWrap(True)
         self.latest_output_label.setMinimumWidth(0)
         self.latest_output_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         output_actions = QHBoxLayout()
         output_actions.setSpacing(8)
-        open_output = QPushButton("打开最近输出")
-        open_output.setObjectName("secondaryButton")
+        open_output = PushButton("打开最近输出")
         open_output.clicked.connect(self.open_latest_output_dir)
-        open_data = QPushButton("数据目录")
-        open_data.setObjectName("ghostButton")
+        open_data = PushButton("数据目录")
         open_data.clicked.connect(lambda: self.open_path(self._current_data_dir()))
-        rerun_button = QPushButton("复用最近任务")
-        rerun_button.setObjectName("ghostButton")
+        rerun_button = PushButton("复用最近任务")
         rerun_button.clicked.connect(self.prepare_latest_run)
         output_actions.addWidget(open_output)
         output_actions.addWidget(open_data)
@@ -825,7 +422,7 @@ class MainWindow(QMainWindow):
         records = self.task_summary.get("latest_records") or []
         if not records:
             empty = QLabel("暂无字幕结果。完成一次采集后，这里会展示电影式资料卡。")
-            empty.setObjectName("mutedText")
+            empty.setStyleSheet("color: #8B95A5; font-size: 13px;")
             empty.setWordWrap(True)
             self.latest_records_layout.addWidget(empty)
             self.latest_records_layout.addStretch(1)
@@ -904,15 +501,13 @@ class MainWindow(QMainWindow):
 
     def _build_collector_tab(self) -> QWidget:
         page = QWidget()
-        page.setStyleSheet(f"QWidget {{ background: {PAGE_BG}; }}")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
 
-        title = QLabel("采集任务")
-        title.setObjectName("pageTitle")
+        title = SubtitleLabel("采集任务")
         subtitle = QLabel("选择年份、Top 数量、字幕源和下载策略，运行采集工作流。")
-        subtitle.setObjectName("mutedText")
+        subtitle.setStyleSheet("color: #8B95A5; font-size: 13px;")
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
@@ -921,18 +516,18 @@ class MainWindow(QMainWindow):
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
 
-        self.year_spin = QSpinBox()
+        self.year_spin = SpinBox()
         self.year_spin.setRange(1900, datetime.now().year + 1)
         self.year_spin.setValue(datetime.now().year)
 
-        self.limit_spin = QSpinBox()
+        self.limit_spin = SpinBox()
         self.limit_spin.setRange(1, 500)
         self.limit_spin.setValue(100)
 
         disabled_providers = set(self.settings.provider_disabled)
-        self.subhd_check = QCheckBox("SubHD")
-        self.assrt_check = QCheckBox("ASSRT")
-        self.opensubtitles_check = QCheckBox("OpenSubtitles")
+        self.subhd_check = CheckBox("SubHD")
+        self.assrt_check = CheckBox("ASSRT")
+        self.opensubtitles_check = CheckBox("OpenSubtitles")
         provider_checks = {
             "subhd": self.subhd_check,
             "assrt": self.assrt_check,
@@ -941,12 +536,12 @@ class MainWindow(QMainWindow):
         for provider, checkbox in provider_checks.items():
             checkbox.setChecked(provider not in disabled_providers)
 
-        self.fallback_check = QCheckBox("源兜底")
+        self.fallback_check = CheckBox("源兜底")
         self.fallback_check.setChecked(True)
-        self.download_check = QCheckBox("下载字幕")
+        self.download_check = CheckBox("下载字幕")
         self.download_check.setChecked(True)
 
-        self.start_button = QPushButton("开始采集")
+        self.start_button = PrimaryPushButton("开始采集", icon=FIF.PLAY)
         self.start_button.clicked.connect(self.start_collection)
 
         form.addWidget(QLabel("年份"), 0, 0)
@@ -970,10 +565,9 @@ class MainWindow(QMainWindow):
         status_layout = QVBoxLayout(status_panel)
         status_layout.setContentsMargins(14, 12, 14, 14)
         status_layout.setSpacing(8)
-        status_title = QLabel("任务状态")
-        status_title.setObjectName("sectionTitle")
+        status_title = StrongBodyLabel("任务状态")
         self.collect_status = QLabel("等待开始")
-        self.collect_progress = QProgressBar()
+        self.collect_progress = ProgressBar()
         self.collect_result_table = QTableWidget(0, 2)
         self.collect_result_table.setObjectName("dataTable")
         self.collect_result_table.setHorizontalHeaderLabels(["指标", "值"])
@@ -988,17 +582,14 @@ class MainWindow(QMainWindow):
         log_panel = self._panel("采集日志")
         log_header = QHBoxLayout()
         log_header.setSpacing(8)
-        log_title = QLabel("采集日志")
-        log_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {TEXT};")
-        self.copy_collect_log_button = QPushButton("复制日志")
-        self.copy_collect_log_button.setObjectName("secondaryButton")
+        log_title = StrongBodyLabel("采集日志")
+        self.copy_collect_log_button = PushButton("复制日志")
         self.copy_collect_log_button.clicked.connect(self.copy_collect_log)
         log_header.addWidget(log_title)
         log_header.addStretch(1)
         log_header.addWidget(self.copy_collect_log_button)
 
-        self.collect_log = QTextEdit()
-        self.collect_log.setObjectName("logPanel")
+        self.collect_log = TextEdit()
         self.collect_log.setReadOnly(True)
         log_panel.layout().addLayout(log_header)
         log_panel.layout().addWidget(self.collect_log)
@@ -1014,22 +605,20 @@ class MainWindow(QMainWindow):
 
     def _build_parser_tab(self) -> QWidget:
         page = QWidget()
-        page.setStyleSheet(f"QWidget {{ background: {PAGE_BG}; }}")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
 
-        title = QLabel("字幕解析")
-        title.setObjectName("pageTitle")
+        title = SubtitleLabel("字幕解析")
         subtitle = QLabel("选择本地 SRT/ASS 文件，解析双语字幕并导出电影 JSON 与字幕 JSON。")
-        subtitle.setObjectName("mutedText")
+        subtitle.setStyleSheet("color: #8B95A5; font-size: 13px;")
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
         action_panel = self._panel("文件选择")
         actions = QHBoxLayout()
         actions.setSpacing(12)
-        self.parse_button = QPushButton("选择 SRT/ASS 文件")
+        self.parse_button = PrimaryPushButton("选择 SRT/ASS 文件", icon=FIF.FOLDER_ADD)
         self.parse_button.clicked.connect(self.select_parse_files)
         self.parse_status = QLabel("等待文件")
         actions.addWidget(self.parse_button)
@@ -1049,8 +638,7 @@ class MainWindow(QMainWindow):
         result_panel.layout().addWidget(self.parse_table)
 
         log_panel = self._panel("解析日志")
-        self.parse_log = QTextEdit()
-        self.parse_log.setObjectName("logPanel")
+        self.parse_log = TextEdit()
         self.parse_log.setReadOnly(True)
         log_panel.layout().addWidget(self.parse_log)
 
@@ -1063,7 +651,6 @@ class MainWindow(QMainWindow):
 
     def _build_history_tab(self) -> QWidget:
         page = QWidget()
-        page.setStyleSheet(f"QWidget {{ background: {PAGE_BG}; }}")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
@@ -1072,15 +659,13 @@ class MainWindow(QMainWindow):
         header_row.setSpacing(12)
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
-        title = QLabel("历史记录")
-        title.setObjectName("pageTitle")
+        title = SubtitleLabel("历史记录")
         subtitle = QLabel("查看最近采集任务状态、参数、开始结束时间和输出目录。")
-        subtitle.setObjectName("mutedText")
+        subtitle.setStyleSheet("color: #8B95A5; font-size: 13px;")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         header_row.addLayout(title_col, 1)
-        refresh_button = QPushButton("刷新历史")
-        refresh_button.setObjectName("secondaryButton")
+        refresh_button = PushButton("刷新历史", icon=FIF.SYNC)
         refresh_button.clicked.connect(self.refresh_history)
         header_row.addWidget(refresh_button)
 
@@ -1104,15 +689,13 @@ class MainWindow(QMainWindow):
 
     def _build_settings_tab(self) -> QWidget:
         page = QWidget()
-        page.setStyleSheet(f"QWidget {{ background: {PAGE_BG}; }}")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
 
-        title = QLabel("设置与维护")
-        title.setObjectName("pageTitle")
+        title = SubtitleLabel("设置与维护")
         subtitle = QLabel("管理数据目录与本地维护操作，密钥和请求策略仅从 .env 读取。")
-        subtitle.setObjectName("mutedText")
+        subtitle.setStyleSheet("color: #8B95A5; font-size: 13px;")
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
@@ -1120,12 +703,12 @@ class MainWindow(QMainWindow):
         cfg_row = QHBoxLayout()
         cfg_row.setSpacing(10)
         cfg_row.addWidget(QLabel("数据目录"))
-        self.data_dir_input = QLineEdit(str(self.settings.data_dir))
+        self.data_dir_input = LineEdit()
+        self.data_dir_input.setText(str(self.settings.data_dir))
         cfg_row.addWidget(self.data_dir_input, 1)
-        browse_button = QPushButton("选择")
-        browse_button.setObjectName("secondaryButton")
+        browse_button = PushButton("选择")
         browse_button.clicked.connect(self.browse_data_dir)
-        save_button = QPushButton("保存")
+        save_button = PrimaryPushButton("保存")
         save_button.clicked.connect(self.save_data_dir_to_env)
         cfg_row.addWidget(browse_button)
         cfg_row.addWidget(save_button)
@@ -1146,12 +729,14 @@ class MainWindow(QMainWindow):
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(10, 8, 10, 8)
             card_layout.setSpacing(3)
-            h = QLabel(tip_title)
-            h.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {TEXT};")
+            h = StrongBodyLabel(tip_title)
             b = QLabel(tip_val)
-            b.setObjectName("badgeBlue")
+            b.setStyleSheet("""
+                background: #EEF1FE; color: #4F6EF7; border-radius: 8px;
+                padding: 4px 12px; font-size: 12px; font-weight: 700;
+            """)
             d = QLabel(tip_detail)
-            d.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED};")
+            d.setStyleSheet("color: #8B95A5; font-size: 11px;")
             d.setWordWrap(True)
             d.setMinimumWidth(0)
             d.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -1162,28 +747,31 @@ class MainWindow(QMainWindow):
         tips_panel.layout().addLayout(tips_grid)
 
         danger_panel = QFrame()
-        danger_panel.setObjectName("dangerZone")
+        danger_panel.setStyleSheet("""
+            background: #FEF5F5; border: 1px solid #F5B8B8; border-radius: 8px;
+        """)
         danger_layout = QVBoxLayout(danger_panel)
         danger_layout.setContentsMargins(14, 12, 14, 14)
         danger_layout.setSpacing(8)
-        danger_title = QLabel("数据维护")
-        danger_title.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {DANGER_TEXT};")
+        danger_title = StrongBodyLabel("数据维护")
+        danger_title.setStyleSheet("color: #991B1B;")
         danger_hint = QLabel("危险操作需要明确视觉隔离，运行中的采集任务会禁用这些操作，不会删除 parsed、数据库或缓存。")
-        danger_hint.setStyleSheet(f"font-size: 12px; color: {DANGER_TEXT_MUTED};")
+        danger_hint.setStyleSheet("color: #B91C1C; font-size: 12px;")
         danger_hint.setWordWrap(True)
 
         danger_btn_row = QHBoxLayout()
         danger_btn_row.setSpacing(10)
-        self.reset_history_button = QPushButton("重置历史")
-        self.reset_history_button.setObjectName("secondaryButton")
+        self.reset_history_button = PushButton("重置历史")
         self.reset_history_button.clicked.connect(self.reset_history)
         reset_desc = QLabel("清空采集历史记录，保留 output 文件。")
-        reset_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
-        self.delete_output_button = QPushButton("删除输出文件")
-        self.delete_output_button.setObjectName("dangerButton")
+        reset_desc.setStyleSheet("color: #8B95A5; font-size: 12px;")
+        self.delete_output_button = PushButton("删除输出文件")
+        self.delete_output_button.setStyleSheet("""
+            background: #E04040; color: #FFFFFF; border-radius: 6px; padding: 6px 16px;
+        """)
         self.delete_output_button.clicked.connect(self.delete_output_files)
         delete_desc = QLabel("删除 数据目录/output 并清空采集历史。不会删除 parsed、数据库或缓存。")
-        delete_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        delete_desc.setStyleSheet("color: #8B95A5; font-size: 12px;")
 
         danger_btn_row.addWidget(self.reset_history_button)
         danger_btn_row.addWidget(reset_desc)
@@ -1319,12 +907,11 @@ class MainWindow(QMainWindow):
         browser = QTextBrowser()
         browser.setHtml(payload.get("verificationHtml") or "请打开详情页查看验证码。")
         browser.setMinimumHeight(180)
-        code_input = QLineEdit()
+        code_input = LineEdit()
         code_input.setPlaceholderText("输入验证码")
         buttons = QHBoxLayout()
-        submit = QPushButton("提交")
-        cancel = QPushButton("跳过")
-        cancel.setObjectName("secondaryButton")
+        submit = PrimaryPushButton("提交")
+        cancel = PushButton("跳过")
         buttons.addWidget(submit)
         buttons.addWidget(cancel)
         layout.addWidget(browser)
@@ -1383,6 +970,51 @@ class MainWindow(QMainWindow):
         )
         if not files:
             return
+
+        validated_files: list[Path] = []
+        skipped_small: list[str] = []
+        skipped_suffix: list[str] = []
+        skipped_invalid: list[str] = []
+        MIN_FILE_SIZE = 10 * 1024
+        for file in files:
+            path = Path(file)
+            suffix = path.suffix.lower()
+            if suffix not in {".srt", ".ass"}:
+                skipped_suffix.append(path.name)
+                continue
+            file_size = path.stat().st_size
+            if file_size < MIN_FILE_SIZE:
+                skipped_small.append(f"{path.name} ({file_size / 1024:.1f} KB)")
+                continue
+            try:
+                content = path.read_bytes()
+                decoded_text = content.decode("utf-8", errors="ignore")
+                if len(decoded_text.strip()) < 50:
+                    skipped_invalid.append(f"{path.name}（内容过少，可能不是有效字幕）")
+                    continue
+                from ..engines.subtitle_engine import validate_is_simplified_chinese_english
+                is_valid, msg = validate_is_simplified_chinese_english(decoded_text)
+                if not is_valid:
+                    skipped_invalid.append(f"{path.name}（{msg}）")
+                    continue
+            except Exception as e:
+                skipped_invalid.append(f"{path.name}（读取失败：{e}）")
+                continue
+            validated_files.append(path)
+
+        if skipped_small or skipped_suffix or skipped_invalid:
+            parts = []
+            if skipped_suffix:
+                parts.append(f"格式不符（仅支持 .srt/.ass）：\n" + "\n".join(skipped_suffix))
+            if skipped_small:
+                parts.append(f"文件过小（< 10 KB 视作无效字幕）：\n" + "\n".join(skipped_small))
+            if skipped_invalid:
+                parts.append(f"内容校验未通过：\n" + "\n".join(skipped_invalid))
+            QMessageBox.information(self, "文件校验提示", "\n\n".join(parts))
+
+        if not validated_files:
+            return
+
         try:
             data_dir = self._ensure_storage_for_current_data_dir()
         except ValueError as exc:
@@ -1395,7 +1027,7 @@ class MainWindow(QMainWindow):
         output_dir = data_dir / "parsed"
         env_settings = AppSettings.from_env(self.env_bootstrap.env_path)
         self.parser_worker = ParserWorker(
-            [Path(file) for file in files],
+            validated_files,
             output_dir,
             env_settings.tmdb_token,
         )
@@ -1573,6 +1205,7 @@ class MainWindow(QMainWindow):
 
 def run_app(argv: list[str]) -> int:
     app = QApplication(argv)
+    app.setStyle("Fusion")
     window = MainWindow()
     window.show()
     return app.exec()

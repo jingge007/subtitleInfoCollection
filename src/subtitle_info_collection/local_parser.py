@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .adapters.tmdb import TmdbClient
-from .engines.subtitle_engine import decode_subtitle_bytes, parse_subtitle_text
+from .engines.subtitle_engine import (
+    TRADITIONAL_ONLY_CHARS,
+    decode_subtitle_bytes,
+    filter_to_simplified_chinese,
+    parse_subtitle_text,
+    validate_is_simplified_chinese_english,
+)
 from .models import MovieInfo, SubtitleEntry
 
 NOISE_RE = re.compile(
@@ -15,6 +21,15 @@ NOISE_RE = re.compile(
     r"chs|cht|eng|gb|big5|中字|双语|中英|简中|繁中|字幕)\b",
     re.I,
 )
+
+
+def validate_bilingual_subtitle(text: str) -> tuple[bool, str]:
+    """Validate if subtitle contains simplified Chinese and English bilingual content.
+    
+    Returns:
+        (is_valid, message): tuple of validation result and descriptive message
+    """
+    return validate_is_simplified_chinese_english(text)
 
 
 @dataclass(slots=True)
@@ -87,9 +102,19 @@ async def parse_local_subtitle_file(path: Path, tmdb_token: str = "") -> ParsedS
     if suffix not in {"srt", "ass"}:
         raise ValueError("仅支持 .srt 和 .ass 字幕文件")
 
-    decoded = decode_subtitle_bytes(path.read_bytes())
+    try:
+        file_bytes = path.read_bytes()
+        decoded = decode_subtitle_bytes(file_bytes)
+    except Exception as e:
+        raise ValueError(f"字幕文件无法读取或解码：{e}")
+    
     if not decoded.content:
         raise ValueError("字幕文件无法解码")
+
+    full_text = decoded.content
+    is_valid, validation_msg = validate_bilingual_subtitle(full_text)
+    if not is_valid:
+        raise ValueError(f"字幕校验失败：{validation_msg}")
 
     movie, keyword = await _match_movie(path, tmdb_token)
     parsed = parse_subtitle_text(decoded.content, suffix, movie.movie_id)
@@ -101,6 +126,9 @@ async def parse_local_subtitle_file(path: Path, tmdb_token: str = "") -> ParsedS
     ]
     if not filtered:
         raise ValueError(f"未找到包含中英文的字幕内容（原始 {original_count} 条字幕全部被过滤）")
+
+    if len(filtered) < 5:
+        raise ValueError(f"有效双语字幕条目仅 {len(filtered)} 条，不足 5 条，判定为无效电影字幕文件")
 
     normalized = [
         SubtitleEntry(

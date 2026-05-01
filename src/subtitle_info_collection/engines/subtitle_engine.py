@@ -25,6 +25,326 @@ ENGLISH_RE = re.compile(r"[A-Za-z]")
 ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'.-]*")
 REPLACEMENT_RE = re.compile("\ufffd")
 
+TRADITIONAL_TO_SIMPLIFIED_MAP = {
+    '\u5011': '\u4eec',
+    '\u500b': '\u4e2a',
+    '\u5e79': '\u5e72',
+    '\u4ec0\u9ebc': '\u4ec0\u4e48',
+    '\u8aaa': '\u8bf4',
+    '\u8a71': '\u8bdd',
+    '\u8a9e': '\u8bed',
+    '\u8b80': '\u8bfb',
+    '\u66f8': '\u4e66',
+    '\u5beb': '\u5199',
+    '\u5b78': '\u5b66',
+    '\u7fd2': '\u4e60',
+    '\u96fb': '\u7535',
+    '\u8166': '\u8111',
+    '\u7db2': '\u7f51',
+    '\u8def': '\u8def',
+    '\u8cfc': '\u8d2d',
+    '\u7269': '\u7269',
+    '\u8edf': '\u8f6f',
+    '\u9ad4': '\u4f53',
+    '\u786c': '\u786c',
+    '\u8cc7': '\u8d44',
+    '\u6599': '\u6599',
+    '\u5eab': '\u5e93',
+    '\u554f': '\u95ee',
+    '\u984c': '\u9898',
+    '\u96e3': '\u96be',
+    '\u9ede': '\u70b9',
+    '\u958b': '\u5f00',
+    '\u95dc': '\u5173',
+    '\u5fc3': '\u5fc3',
+    '\u60c5': '\u60c5',
+    '\u611f': '\u611f',
+    '\u89ba': '\u89c9',
+    '\u5f97': '\u5f97',
+    '\u767c': '\u53d1',
+    '\u73fe': '\u73b0',
+    '\u807d': '\u542c',
+    '\u8b1b': '\u8bb2',
+    '\u8ad6': '\u8bba',
+    '\u8b70': '\u8bae',
+    '\u8ac7': '\u8c08',
+    '\u8a2a': '\u8bbf',
+    '\u986f': '\u663e',
+    '\u793a': '\u793a',
+    '\u8077': '\u804c',
+    '\u696d': '\u4e1a',
+    '\u5c08': '\u4e13',
+    '\u512a': '\u4f18',
+    '\u52a3': '\u52a3',
+    '\u8003': '\u8003',
+    '\u8a66': '\u8bd5',
+    '\u9a57': '\u9a8c',
+    '\u8b49': '\u8bc1',
+    '\u660e': '\u660e',
+    '\u9867': '\u987e',
+    '\u554f': '\u95ee',
+    '\u8cc7': '\u8d44',
+    '\u8a0a': '\u8baf',
+    '\u5831': '\u62a5',
+    '\u544a': '\u544a',
+    '\u7d50': '\u7ed3',
+    '\u679c': '\u679c',
+    '\u5283': '\u5212',
+    '\u7b97': '\u7b97',
+    '\u8a08': '\u8ba1',
+    '\u756b': '\u753b',
+    '\u898f': '\u89c4',
+    '\u76e3': '\u76d1',
+    '\u7763': '\u7763',
+    '\u6aa2': '\u68c0',
+    '\u67e5': '\u67e5',
+    '\u5be9': '\u5ba1',
+    '\u6838': '\u6838',
+    '\u6279': '\u6279',
+    '\u6e96': '\u51c6',
+    '\u8a31': '\u8bb8',
+    '\u53ef': '\u53ef',
+    '\u842c': '\u4e07',
+    '\u865f': '\u53f7',
+    '\u6a19': '\u6807',
+    '\u6e96': '\u51c6',
+    '\u898f': '\u89c4',
+    '\u7bc4': '\u8303',
+    '\u8cea': '\u8d28',
+    '\u91cf': '\u91cf',
+    '\u63a7': '\u63a7',
+    '\u5236': '\u5236',
+    '\u98a8': '\u98ce',
+    '\u96aa': '\u9669',
+    '\u7ba1': '\u7ba1',
+    '\u7406': '\u7406',
+    '\u767c': '\u53d1',
+    '\u5c55': '\u5c55',
+    '\u5275': '\u521b',
+    '\u65b0': '\u65b0',
+    '\u7af6': '\u7ade',
+    '\u722d': '\u4e89',
+    '\u512a': '\u4f18',
+    '\u52e2': '\u52bf',
+    '\u7522': '\u4ea7',
+    '\u54c1': '\u54c1',
+    '\u670d': '\u670d',
+    '\u52d9': '\u52a1',
+    '\u5ba2': '\u5ba2',
+    '\u6236': '\u6237',
+    '\u9700': '\u9700',
+    '\u6c42': '\u6c42',
+    '\u6eff': '\u6ee1',
+    '\u610f': '\u610f',
+    '\u5ea6': '\u5ea6',
+    '\u8abf': '\u8c03',
+    '\u67e5': '\u67e5',
+    '\u7d71': '\u7edf',
+    '\u8a08': '\u8ba1',
+    '\u5206': '\u5206',
+    '\u6790': '\u6790',
+    '\u8868': '\u8868',
+    '\u5831': '\u62a5',
+    '\u904b': '\u8fd0',
+    '\u8f38': '\u8f93',
+    '\u7269': '\u7269',
+    '\u6d41': '\u6d41',
+    '\u5009': '\u4ed3',
+    '\u5132': '\u50a8',
+    '\u4fdd': '\u4fdd',
+    '\u7ba1': '\u7ba1',
+    '\u8655': '\u5904',
+    '\u7406': '\u7406',
+    '\u89e3': '\u89e3',
+    '\u6c7a': '\u51b3',
+    '\u6267': '\u6267',
+    '\u884c': '\u884c',
+    '\u5be6': '\u5b9e',
+    '\u65bd': '\u65bd',
+    '\u63a8': '\u63a8',
+    '\u5ee3': '\u5e7f',
+    '\u61c9': '\u5e94',
+    '\u7528': '\u7528',
+    '\u74b0': '\u73af',
+    '\u5883': '\u5883',
+    '\u7d93': '\u7ecf',
+    '\u9a57': '\u9a8c',
+    '\u50b3': '\u4f20',
+    '\u7d71': '\u7edf',
+    '\u73fe': '\u73b0',
+    '\u4ee3': '\u4ee3',
+    '\u6280': '\u6280',
+    '\u8853': '\u672f',
+    '\u5de5': '\u5de5',
+    '\u7a0b': '\u7a0b',
+    '\u79d1': '\u79d1',
+    '\u5b78': '\u5b66',
+    '\u7814': '\u7814',
+    '\u7a76': '\u7a76',
+    '\u958b': '\u5f00',
+    '\u767c': '\u53d1',
+    '\u8a2d': '\u8bbe',
+    '\u8a08': '\u8ba1',
+    '\u88fd': '\u5236',
+    '\u9020': '\u9020',
+    '\u52a0': '\u52a0',
+    '\u5de5': '\u5de5',
+    '\u751f': '\u751f',
+    '\u7522': '\u4ea7',
+    '\u8cea': '\u8d28',
+    '\u6aa2': '\u68c0',
+    '\u5305': '\u5305',
+    '\u88dd': '\u88c5',
+    '\u6e2c': '\u6d4b',
+    '\u8a66': '\u8bd5',
+    '\u68c0': '\u68c0',
+    '\u9a57': '\u9a8c',
+    '\u9a4c': '\u9a8c',
+    '\u6536': '\u6536',
+    '\u767c': '\u53d1',
+    '\u8ca8': '\u8d27',
+    '\u8cfc': '\u8d2d',
+    '\u8cb7': '\u4e70',
+    '\u8ce3': '\u5356',
+    '\u4ea4': '\u4ea4',
+    '\u6613': '\u6613',
+    '\u5408': '\u5408',
+    '\u540c': '\u540c',
+    '\u5354': '\u534f',
+    '\u8b70': '\u8bae',
+    '\u689d': '\u6761',
+    '\u6b3e': '\u6b3e',
+    '\u898f': '\u89c4',
+    '\u5b9a': '\u5b9a',
+    '\u689d': '\u6761',
+    '\u4f8b': '\u4f8b',
+    '\u6cd5': '\u6cd5',
+    '\u898f': '\u89c4',
+    '\u653f': '\u653f',
+    '\u7b56': '\u7b56',
+    '\u63aa': '\u63aa',
+    '\u65bd': '\u65bd',
+    '\u884c': '\u884c',
+    '\u52d5': '\u52a8',
+    '\u806f': '\u8054',
+    '\u7e6b': '\u7cfb',
+    '\u6e9d': '\u6c9f',
+    '\u901a': '\u901a',
+    '\u5354': '\u534f',
+    '\u8abf': '\u8c03',
+    '\u914d': '\u914d',
+    '\u5408': '\u5408',
+    '\u652f': '\u652f',
+    '\u63f4': '\u63f4',
+    '\u8cc7': '\u8d44',
+    '\u63f4': '\u63f4',
+    '\u5354': '\u534f',
+    '\u52a9': '\u52a9',
+    '\u5e6b': '\u5e2e',
+    '\u5fd9': '\u5fd9',
+    '\u63d0': '\u63d0',
+    '\u4f9b': '\u4f9b',
+    '\u7d66': '\u7ed9',
+    '\u4e88': '\u4e88',
+    '\u8f38': '\u8f93',
+    '\u5165': '\u5165',
+    '\u8f38': '\u8f93',
+    '\u51fa': '\u51fa',
+    '\u5b58': '\u5b58',
+    '\u53d6': '\u53d6',
+    '\u8655': '\u5904',
+    '\u7406': '\u7406',
+    '\u4fdd': '\u4fdd',
+    '\u5b58': '\u5b58',
+    '\u5099': '\u5907',
+    '\u4efd': '\u4efd',
+    '\u9084': '\u8fd8',
+    '\u539f': '\u539f',
+    '\u6062': '\u6062',
+    '\u5fa9': '\u590d',
+    '\u91cd': '\u91cd',
+    '\u7f6e': '\u7f6e',
+    '\u6e05': '\u6e05',
+    '\u9664': '\u9664',
+    '\u522a': '\u5220',
+    '\u9664': '\u9664',
+    '\u64b0': '\u64b0',
+    '\u5beb': '\u5199',
+    '\u8d77': '\u8d77',
+    '\u8349': '\u8349',
+    '\u5be9': '\u5ba1',
+    '\u8b80': '\u8bfb',
+    '\u4fee': '\u4fee',
+    '\u6539': '\u6539',
+    '\u88dc': '\u8865',
+    '\u5145': '\u5145',
+    '\u589e': '\u589e',
+    '\u52a0': '\u52a0',
+    '\u6e1b': '\u51cf',
+    '\u5c11': '\u5c11',
+    '\u4fee': '\u4fee',
+    '\u6b63': '\u6b63',
+    '\u6821': '\u6821',
+    '\u6b63': '\u6b63',
+    '\u8a8d': '\u8ba4',
+    '\u8b49': '\u8bc1',
+    '\u78ba': '\u786e',
+    '\u8a8d': '\u8ba4',
+    '\u9a57': '\u9a8c',
+    '\u8b49': '\u8bc1',
+    '\u5f9e': '\u4ece',
+    '\u7576': '\u5f53',
+    '\u7136': '\u7136',
+    '\u5f8c': '\u540e',
+    '\u88cf': '\u91cc',
+    '\u88e1': '\u91cc',
+    '\u842c': '\u4e07',
+    '\u885d': '\u51b2',
+    '\u885e': '\u51b2',
+    '\u885f': '\u51b2',
+    '\u8860': '\u51b2',
+    '\u8861': '\u8861',
+    '\u8862': '\u8862',
+    '\u8863': '\u8863',
+    '\u8864': '\u8864',
+    '\u8865': '\u8865',
+    '\u8866': '\u8866',
+    '\u8867': '\u8867',
+    '\u8868': '\u8868',
+    '\u8869': '\u8869',
+    '\u886a': '\u886a',
+    '\u886b': '\u886b',
+    '\u886c': '\u886c',
+    '\u886d': '\u886d',
+    '\u886e': '\u886e',
+    '\u886f': '\u886f',
+    '\u5169': '\u4e24',
+    '\u5169': '\u4e24',
+    '\u96d9': '\u53cc',
+    '\u723e': '\u5c14',
+    '\u9ebc': '\u4e48',
+    '\u5152': '\u513f',
+    '\u96f2': '\u4e91',
+    '\u5e7e': '\u51e0',
+    '\u53c3': '\u53c2',
+    '\u9b25': '\u6597',
+    '\u8591': '\u535c',
+    '\u85c9': '\u85c9',
+    '\u9ebc': '\u4e48',
+    '\u5169': '\u4e24',
+    '\u96d9': '\u53cc',
+    '\u723e': '\u5c14',
+    '\u9ebc': '\u4e48',
+    '\u5152': '\u513f',
+    '\u96f2': '\u4e91',
+    '\u5e7e': '\u51e0',
+    '\u53c3': '\u53c2',
+    '\u9b25': '\u6597',
+    '\u8591': '\u535c',
+}
+
+TRADITIONAL_ONLY_CHARS = frozenset(TRADITIONAL_TO_SIMPLIFIED_MAP.keys())
+
 SUPPORTED_FORMATS = {"ass", "srt"}
 DECODE_ENCODINGS = ["utf-8-sig", "utf-8", "gb18030", "gbk", "utf-16", "utf-16le", "utf-16be"]
 
@@ -45,6 +365,64 @@ TRADITIONAL_ONLY_MARKER_RE = re.compile(
     r"(繁体|繁中|cht|zh[-_ ]?tw|traditional|big5)",
     re.I,
 )
+
+
+def filter_to_simplified_chinese(text: str) -> str:
+    """Filter text to only contain simplified Chinese, English, and common punctuation.
+    
+    Removes:
+    - Traditional Chinese characters (converted to simplified if possible, otherwise removed)
+    - Japanese Hiragana/Katakana
+    - Korean Hangul
+    - Other non-Chinese/English scripts
+    
+    Keeps:
+    - Simplified Chinese characters
+    - English letters (A-Z, a-z)
+    - Numbers and common punctuation
+    """
+    result = []
+    for char in text:
+        ascii_char = ord(char)
+        if ascii_char < 128:
+            result.append(char)
+        elif char in TRADITIONAL_TO_SIMPLIFIED_MAP:
+            result.append(TRADITIONAL_TO_SIMPLIFIED_MAP[char])
+        elif '\u4e00' <= char <= '\u9fff' and char not in TRADITIONAL_ONLY_CHARS:
+            result.append(char)
+        elif char in '，。！？、；：""''（）【】《》…—·\n\r\t ':
+            result.append(char)
+    return ''.join(result)
+
+
+def validate_is_simplified_chinese_english(text: str) -> tuple[bool, str]:
+    """Validate that text contains only simplified Chinese and English content.
+    
+    Checks ORIGINAL text first for traditional characters, then validates
+    the filtered content for simplified Chinese + English requirements.
+    
+    Returns:
+        (is_valid, message): tuple of validation result and descriptive message
+    """
+    if not text.strip():
+        return False, "内容为空"
+    
+    chinese_chars_in_original = re.findall(r'[\u4e00-\u9fff]', text)
+    if not chinese_chars_in_original:
+        return False, "未检测到中文字符"
+    
+    trad_count = sum(1 for char in chinese_chars_in_original if char in TRADITIONAL_ONLY_CHARS)
+    if len(chinese_chars_in_original) >= 5:
+        trad_ratio = trad_count / len(chinese_chars_in_original)
+        if trad_ratio >= 0.2:
+            return False, f"字幕为繁体中文（繁体占比 {trad_ratio:.0%}），非简体中英双语字幕"
+    
+    filtered = filter_to_simplified_chinese(text)
+    english_words = re.findall(r'[A-Za-z]{2,}', filtered)
+    if len(english_words) < 2:
+        return False, "未检测到足够的英文内容"
+    
+    return True, "简体中英双语字幕"
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,11 +632,16 @@ def _make_entry(
 ) -> SubtitleEntry | None:
     lines = []
     for raw_line in raw_lines:
-        lines.extend(clean_subtitle_line(raw_line))
+        cleaned = clean_subtitle_line(raw_line)
+        filtered = [filter_to_simplified_chinese(line) for line in cleaned]
+        filtered = [line for line in filtered if line.strip()]
+        lines.extend(filtered)
     if not lines:
         return None
     zh_content, en_content = split_bilingual_lines(lines)
-    content = "\n".join([item for item in [zh_content, en_content] if item]) or "\n".join(lines)
+    if not zh_content.strip() or not en_content.strip():
+        return None
+    content = "\n".join([item for item in [zh_content, en_content] if item])
     return SubtitleEntry(
         subtitles_id=f"{movie_id or 'unknown'}-{index}",
         movie_id=movie_id,
@@ -416,6 +799,18 @@ def validate_downloaded_subtitle_bytes(
             encoding=decoded.encoding,
             content=decoded.content,
             bilingual_count=0,
+        )
+    
+    simplified_zh = sum(1 for item in entries if item.zh_content.strip())
+    if simplified_zh <= 0:
+        return DownloadValidation(
+            valid=False,
+            error_type=ErrorType.CONTENT_VALIDATION_FAILED,
+            reason="下载到的字幕未包含简体中文内容",
+            subtitle_format=normalized_format,
+            encoding=decoded.encoding,
+            content=decoded.content,
+            bilingual_count=bilingual_count,
         )
 
     return DownloadValidation(

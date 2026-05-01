@@ -1,4 +1,4 @@
-﻿param(
+﻿﻿param(
   [string]$Python = "python"
 )
 
@@ -18,7 +18,6 @@ $pyinstallerArgs = @(
   "--noconfirm",
   "--name", "字幕采集工具",
   "--windowed",
-  "--icon", "assets\head_logo.ico",
   "--collect-all", "PySide6",
   "--collect-all", "playwright",
   "--add-data", ".env.example;."

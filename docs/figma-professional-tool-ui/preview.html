@@ -159,8 +159,6 @@
     }
 
     .input {
-      display: flex;
-      align-items: center;
       height: 34px;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -168,6 +166,13 @@
       color: var(--text);
       background: var(--surface);
       font-size: 13px;
+      font-family: inherit;
+      outline: none;
+    }
+
+    div.input {
+      display: flex;
+      align-items: center;
     }
 
     .screen {
@@ -376,18 +381,19 @@
       gap: 12px 18px;
     }
 
-    .checks span {
+    .checks label {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       font-size: 13px;
+      cursor: pointer;
     }
 
-    .checks i {
+    .checks input[type="checkbox"] {
       width: 16px;
       height: 16px;
-      border-radius: 4px;
-      background: var(--primary);
+      margin: 0;
+      accent-color: var(--primary);
     }
 
     .two-col {
@@ -658,10 +664,10 @@
         <section class="panel">
           <h3>采集参数</h3>
           <div class="form-row" style="margin-top:16px">
-            <div class="field"><label>年份</label><div class="input">2026</div></div>
-            <div class="field"><label>Top 数量</label><div class="input">100</div></div>
-            <div class="field"><label>请求间隔</label><div class="input">13000 ms</div></div>
-            <div class="check-group"><label>字幕源与策略</label><div class="checks"><span><i></i>SubHD</span><span><i></i>ASSRT</span><span><i></i>OpenSubtitles</span><span><i></i>源兜底</span><span><i></i>下载字幕</span></div></div>
+            <div class="field"><label>年份</label><input type="number" value="2026" class="input"></div>
+            <div class="field"><label>Top 数量</label><input type="number" value="100" class="input"></div>
+            <div class="field"><label>请求间隔</label><input type="number" value="13000" class="input"> ms</div>
+            <div class="check-group"><label>字幕源与策略</label><div class="checks"><label><input type="checkbox" checked> SubHD</label><label><input type="checkbox" checked> ASSRT</label><label><input type="checkbox" checked> OpenSubtitles</label><label><input type="checkbox" checked> 源兜底</label><label><input type="checkbox" checked> 下载字幕</label></div></div>
             <span class="btn primary">采集中...</span>
           </div>
         </section>
@@ -780,7 +786,7 @@
           <h3>本机配置</h3>
           <div class="form-row" style="grid-template-columns: 110px 1fr auto auto; margin-top:18px">
             <p class="sub" style="margin:0">数据目录</p>
-            <div class="input">C:\Users\jing1\subtitleInfoCollection</div>
+            <input type="text" class="input" value="C:\Users\jing1\subtitleInfoCollection" style="width:100%">
             <span class="btn">选择数据目录</span>
             <span class="btn primary">保存数据目录</span>
           </div>

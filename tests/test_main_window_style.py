@@ -30,13 +30,10 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     window = MainWindow()
 
     style = window.styleSheet()
-    assert "QFrame#sidebarDivider" in style
     assert "QFrame#dangerZone" in style
     assert "QTableWidget#dataTable" in style
     assert "QTextEdit#logPanel" in style
     assert "QPushButton#navButton" in style
-    assert "QProgressBar" in style
-    assert "QScrollBar" in style
 
     page_titles = sorted(
         label.text()
