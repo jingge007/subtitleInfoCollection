@@ -109,6 +109,44 @@ class AppStorage:
             result.append(item)
         return result
 
+    def task_center_summary(self, limit: int = 6) -> dict[str, Any]:
+        recent_runs = self.list_task_runs(limit)
+        totals = {
+            "runs": len(recent_runs),
+            "movies": 0,
+            "best": 0,
+            "failed": 0,
+            "downloads": 0,
+        }
+        latest_records: list[dict[str, Any]] = []
+        source_health: dict[str, Any] = {}
+        provider_stats: dict[str, Any] = {}
+        package_path = ""
+
+        for run in recent_runs:
+            result = run.get("result", {})
+            totals["movies"] += int(result.get("movieCount") or 0)
+            totals["best"] += int(result.get("bestCount") or 0)
+            totals["failed"] += int(result.get("failedCount") or 0)
+            totals["downloads"] += int(result.get("downloadCount") or 0)
+            if not latest_records:
+                latest_records = list(result.get("latestRecords") or [])[:5]
+            if not source_health:
+                source_health = dict(result.get("sourceHealth") or {})
+            if not provider_stats:
+                provider_stats = dict(result.get("providerStats") or {})
+            if not package_path:
+                package_path = str(result.get("downloadDir") or "")
+
+        return {
+            "totals": totals,
+            "recent_runs": recent_runs,
+            "latest_records": latest_records,
+            "source_health": source_health,
+            "provider_stats": provider_stats,
+            "package_path": package_path,
+        }
+
     def clear_task_runs(self) -> None:
         with self._connect() as connection:
             connection.execute("delete from task_runs")

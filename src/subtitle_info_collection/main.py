@@ -5,7 +5,7 @@ import sys
 
 def main() -> int:
     try:
-        from .gui.main_window import run_app
+        from subtitle_info_collection.gui.main_window import run_app
     except ImportError as exc:
         print("运行桌面应用需要安装 PySide6。")
         print(f"导入错误：{exc}")

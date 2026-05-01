@@ -126,11 +126,6 @@ python -m subtitle_info_collection
   subtitle_info_collection.sqlite3
   output/
     YYYYMMDDHHMMSS-YYYY-topN/
-      movies-YYYY-topN.json
-      subtitles-YYYY-topN-all.json
-      subtitles-YYYY-topN-best.json
-      subtitles-YYYY-topN-failed.json
-      subtitles-YYYYMMDDHHMMSS.zip
       subtitles/
         *.srt
         *.ass
@@ -171,7 +166,7 @@ pytest
 打包完成后，程序位于：
 
 ```text
-dist\subtitleInfoCollection
+dist\字幕采集工具
 ```
 
 如果需要指定 Python 命令：

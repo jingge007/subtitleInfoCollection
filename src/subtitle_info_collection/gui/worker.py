@@ -91,7 +91,7 @@ class ParserWorker(QThread):
 
             for path in self.files:
                 try:
-                    self.log_message.emit(f"解析字幕：{path.name}")
+                    self.log_message.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 解析字幕：{path.name}")
                     parsed = await parse_local_subtitle_file(path, self.tmdb_token)
                     payload = parsed.payload()
                     movie_id = payload["movieId"]
@@ -108,6 +108,7 @@ class ParserWorker(QThread):
                     successes.append(row)
                     self.file_parsed.emit(row)
                 except Exception as exc:  # noqa: BLE001
+                    self.log_message.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 解析失败：{path.name} / {exc}")
                     failure = {"file": str(path), "error": str(exc)}
                     failures.append(failure)
                     self.file_parsed.emit(failure)

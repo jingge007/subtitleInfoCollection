@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +11,7 @@ from .adapters.base import DownloadContext, ProviderAdapter, ProviderHealth, Req
 from .adapters.opensubtitles import OpenSubtitlesProvider
 from .adapters.subhd import SubhdProvider
 from .adapters.tmdb import TmdbClient
-from .engines.archives import create_zip_package, safe_filename, save_downloaded_payloads
+from .engines.archives import safe_filename, save_downloaded_payloads
 from .engines.scorer import score_candidate, sort_candidates
 from .engines.subtitle_engine import validate_candidate_metadata
 from .errors import CollectorError, ErrorType, classify_exception
@@ -33,13 +32,7 @@ ProgressCallback = Callable[[dict[str, object]], None]
 @dataclass(slots=True)
 class RunPaths:
     output_dir: Path
-    movies_path: Path
-    all_path: Path
-    best_path: Path
-    failed_path: Path
     download_dir: Path
-    package_name: str
-    package_path: Path
 
 
 def timestamp_tag(value: datetime | None = None) -> str:
@@ -51,22 +44,10 @@ def get_run_paths(output_root: Path, year: int, limit: int, started_at: datetime
     stamp = timestamp_tag(started_at)
     top_tag = f"top{limit}"
     output_dir = output_root / f"{stamp}-{year}-{top_tag}"
-    package_name = f"subtitles-{stamp}.zip"
     return RunPaths(
         output_dir=output_dir,
-        movies_path=output_dir / f"movies-{year}-{top_tag}.json",
-        all_path=output_dir / f"subtitles-{year}-{top_tag}-all.json",
-        best_path=output_dir / f"subtitles-{year}-{top_tag}-best.json",
-        failed_path=output_dir / f"subtitles-{year}-{top_tag}-failed.json",
         download_dir=output_dir / "subtitles",
-        package_name=package_name,
-        package_path=output_dir / package_name,
     )
-
-
-def write_json(path: Path, data: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def create_provider_registry(config: TaskConfig) -> dict[str, ProviderAdapter]:
@@ -157,14 +138,13 @@ class SubtitleCollectionOrchestrator:
 
         try:
             self.log(
-                f"任务开始：{config.year} 年 Top{config.limit}，字幕源 "
+                f"[{datetime.now().strftime('%H:%M:%S')}] 任务开始：{config.year} 年 Top{config.limit}，字幕源 "
                 f"{', '.join(provider.id for provider in providers) or '无'}"
             )
             movies = await self._resolve_movies(config)
             for movie in movies:
                 self.storage and self.storage.save_movie(movie)
-            write_json(paths.movies_path, [movie.to_export_dict() for movie in movies])
-            self.log(f"电影列表数量：{len(movies)}")
+            self.log(f"[{datetime.now().strftime('%H:%M:%S')}] 电影列表数量：{len(movies)}")
 
             if not active_providers:
                 failed_records.append(
@@ -180,7 +160,7 @@ class SubtitleCollectionOrchestrator:
             for index, movie in enumerate(movies, start=1):
                 movie_name = movie.display_title
                 self.progress({"current": index, "total": len(movies), "currentMovie": movie_name})
-                self.log(f"[{index}/{len(movies)}] 采集：{movie_name}")
+                self.log(f"[{datetime.now().strftime('%H:%M:%S')}] [{index}/{len(movies)}] 采集：{movie_name}")
 
                 candidates = await self._collect_movie_candidates(
                     movie=movie,
@@ -199,7 +179,6 @@ class SubtitleCollectionOrchestrator:
                             error="没有找到符合要求的双语 ass/srt 字幕候选",
                         )
                     )
-                    self._write_incremental(paths, all_candidates, best_candidates, failed_records)
                     continue
 
                 sorted_candidates = sort_candidates(candidates)
@@ -207,7 +186,7 @@ class SubtitleCollectionOrchestrator:
                 best_candidates.append(best)
                 all_candidates.extend(sorted_candidates)
                 self.storage and [self.storage.save_candidate(item) for item in sorted_candidates]
-                self.log(f"命中 {len(sorted_candidates)} 条，推荐：{best.provider}/{best.subtitle_title}")
+                self.log(f"[{datetime.now().strftime('%H:%M:%S')}] 命中 {len(sorted_candidates)} 条，推荐：{best.provider}/{best.subtitle_title}")
 
                 if config.download_enabled:
                     await self._download_best(
@@ -219,13 +198,7 @@ class SubtitleCollectionOrchestrator:
                         failed_records=failed_records,
                         download_results=download_results,
                     )
-                self._write_incremental(paths, all_candidates, best_candidates, failed_records)
 
-            package_path = create_zip_package(
-                [path for result in download_results for path in result.saved_paths],
-                paths.package_path,
-                paths.download_dir,
-            )
             result = self._build_result(
                 config=config,
                 paths=paths,
@@ -237,11 +210,9 @@ class SubtitleCollectionOrchestrator:
                 download_results=download_results,
                 source_health=source_health,
                 provider_stats=provider_stats,
-                package_path=package_path,
             )
-            self._write_incremental(paths, all_candidates, best_candidates, failed_records)
             self.storage and self.storage.finish_task_run(run_id, "completed", result)
-            self.log("字幕采集任务完成")
+            self.log(f"[{datetime.now().strftime('%H:%M:%S')}] 字幕采集任务完成")
             return result
         except Exception as exc:
             result = {
@@ -407,26 +378,6 @@ class SubtitleCollectionOrchestrator:
                 )
             )
 
-    def _write_incremental(
-        self,
-        paths: RunPaths,
-        all_candidates: list[SubtitleCandidate],
-        best_candidates: list[SubtitleCandidate],
-        failed_records: list[FailedRecord],
-    ) -> None:
-        write_json(paths.all_path, [item.to_export_dict() for item in all_candidates])
-        best_ids = {(item.provider, item.provider_subtitle_id, item.movie_id) for item in best_candidates}
-        write_json(
-            paths.best_path,
-            [
-                item.to_export_dict(
-                    (item.provider, item.provider_subtitle_id, item.movie_id) in best_ids
-                )
-                for item in best_candidates
-            ],
-        )
-        write_json(paths.failed_path, [item.to_export_dict() for item in failed_records])
-
     def _build_result(
         self,
         config: TaskConfig,
@@ -439,7 +390,6 @@ class SubtitleCollectionOrchestrator:
         download_results: list[DownloadResult],
         source_health: dict[str, dict[str, object]],
         provider_stats: dict[str, dict[str, object]],
-        package_path: Path | None,
     ) -> dict[str, object]:
         downloadable = []
         for result_index, result in enumerate(download_results, start=1):
@@ -473,12 +423,7 @@ class SubtitleCollectionOrchestrator:
             "bestCount": len(best_candidates),
             "failedCount": len(failed_records),
             "downloadCount": len(download_results),
-            "moviesPath": str(paths.movies_path),
-            "allPath": str(paths.all_path),
-            "bestPath": str(paths.best_path),
-            "failedPath": str(paths.failed_path),
-            "subtitlePackageName": paths.package_name if package_path else "",
-            "subtitlePackagePath": str(package_path) if package_path else "",
+            "downloadDir": str(paths.download_dir),
             "sourceHealth": source_health,
             "providerStats": provider_stats,
             "movies": [movie.to_export_dict() for movie in movies],
