@@ -9,7 +9,11 @@ from pathlib import Path
 from ..errors import CollectorError, ErrorType
 from ..models import DownloadedPayload, SubtitleCandidate
 from .scorer import normalize_text
-from .subtitle_engine import detect_subtitle_format, validate_downloaded_subtitle_bytes
+from .subtitle_engine import (
+    MIN_VALID_SUBTITLE_BYTES,
+    detect_subtitle_format,
+    validate_downloaded_subtitle_bytes,
+)
 
 
 ARCHIVE_EXTENSIONS = {".zip", ".7z", ".rar"}
@@ -52,14 +56,20 @@ def _save_validated_bytes(
     save_path: Path,
     subtitle_format: str,
     file_name: str,
+    lenient: bool = False,
 ) -> Path:
-    """保存验证后的字幕字节数据"""
-    validation = validate_downloaded_subtitle_bytes(data, subtitle_format, file_name)
+    validation = validate_downloaded_subtitle_bytes(data, subtitle_format, file_name, lenient=lenient)
+    if not validation.valid and not lenient:
+        validation = validate_downloaded_subtitle_bytes(data, subtitle_format, file_name, lenient=True)
+        if validation.valid:
+            lenient = True
+
     if not validation.valid:
         raise CollectorError(validation.reason, validation.error_type)
 
+    content = validation.content or data.decode("utf-8", errors="replace")
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    save_path.write_text(validation.content, encoding="utf-8")
+    save_path.write_text(content, encoding="utf-8")
     return save_path
 
 
@@ -133,10 +143,11 @@ def save_downloaded_payloads(
     save_dir: Path,
     base_name: str,
     candidate: SubtitleCandidate,
+    lenient: bool = False,
 ) -> list[Path]:
-    """保存下载的字幕载荷"""
     saved: list[Path] = []
     last_error: CollectorError | None = None
+    all_extracted: list[tuple[str, bytes, str]] = []
 
     for payload in payloads:
         extracted_items: list[tuple[str, bytes]]
@@ -152,20 +163,32 @@ def save_downloaded_payloads(
             subtitle_format = detect_subtitle_format(file_name) or candidate.subtitle_format
             if subtitle_format not in {"ass", "srt"}:
                 continue
+            all_extracted.append((file_name, data, subtitle_format))
+
+    for file_name, data, subtitle_format in all_extracted:
+        save_path = save_dir / f"{safe_filename(base_name)}.{subtitle_format}"
+        try:
+            saved.append(_save_validated_bytes(data, save_path, subtitle_format, file_name, lenient=lenient))
+            break
+        except CollectorError as exc:
+            last_error = exc
+
+    if not saved and all_extracted:
+        for file_name, data, subtitle_format in all_extracted:
             save_path = save_dir / f"{safe_filename(base_name)}.{subtitle_format}"
             try:
-                saved.append(_save_validated_bytes(data, save_path, subtitle_format, file_name))
+                saved.append(_save_validated_bytes(data, save_path, subtitle_format, file_name, lenient=True))
                 break
-            except CollectorError as exc:
-                last_error = exc
-
-        if saved:
-            break
+            except CollectorError:
+                continue
 
     if not saved:
         if last_error:
             raise last_error
-        raise CollectorError("下载的载荷不包含有效的 ass/srt 字幕", ErrorType.DOWNLOAD_FAILED)
+        raise CollectorError(
+            f"下载的载荷不包含大于 {MIN_VALID_SUBTITLE_BYTES // 1024}KB 的有效 ass/srt 字幕",
+            ErrorType.DOWNLOAD_FAILED,
+        )
 
     return saved
 

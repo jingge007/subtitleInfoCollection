@@ -6,9 +6,8 @@ from pathlib import Path
 
 from .adapters.tmdb import TmdbClient
 from .engines.subtitle_engine import (
-    TRADITIONAL_ONLY_CHARS,
+    MIN_VALID_SUBTITLE_BYTES,
     decode_subtitle_bytes,
-    filter_to_simplified_chinese,
     parse_subtitle_text,
     validate_is_simplified_chinese_english,
 )
@@ -104,9 +103,18 @@ async def parse_local_subtitle_file(path: Path, tmdb_token: str = "") -> ParsedS
 
     try:
         file_bytes = path.read_bytes()
+    except Exception as e:
+        raise ValueError(f"字幕文件无法读取：{e}")
+
+    if len(file_bytes) < MIN_VALID_SUBTITLE_BYTES:
+        raise ValueError(
+            f"字幕文件小于 100KB，判定为无效电影字幕（当前 {len(file_bytes) / 1024:.1f} KB）"
+        )
+
+    try:
         decoded = decode_subtitle_bytes(file_bytes)
     except Exception as e:
-        raise ValueError(f"字幕文件无法读取或解码：{e}")
+        raise ValueError(f"字幕文件无法解码：{e}")
     
     if not decoded.content:
         raise ValueError("字幕文件无法解码")

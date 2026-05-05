@@ -7,6 +7,11 @@ from subtitle_info_collection.engines.subtitle_engine import (
 from subtitle_info_collection.models import SubtitleCandidate
 
 
+def make_srt_bytes(repeat: int = 1) -> bytes:
+    block = "1\n00:00:01,000 --> 00:00:02,000\n你好\nHello world\n\n"
+    return (block * repeat).encode()
+
+
 def make_candidate(**patch):
     data = {
         "provider": "subhd",
@@ -76,14 +81,29 @@ def test_validate_candidate_metadata_rejects_traditional_only():
     assert validation.error_type == "INVALID_LANGUAGE"
 
 
+def test_validate_downloaded_subtitle_bytes_rejects_small_movie_subtitle_file():
+    data = make_srt_bytes(1)
+    validation = validate_downloaded_subtitle_bytes(data, "srt", "demo.srt")
+    assert not validation.valid
+    assert validation.error_type == "CONTENT_VALIDATION_FAILED"
+    assert "小于 100KB" in validation.reason
+
+
 def test_validate_downloaded_subtitle_bytes_requires_bilingual_content():
-    data = "1\n00:00:01,000 --> 00:00:02,000\n你好\nHello\n".encode()
+    data = make_srt_bytes(2500)
     validation = validate_downloaded_subtitle_bytes(data, "srt", "demo.srt")
     assert validation.valid
-    assert validation.bilingual_count == 1
+    assert validation.bilingual_count == 2500
 
-    invalid = "1\n00:00:01,000 --> 00:00:02,000\n你好\n".encode()
+    invalid = ("1\n00:00:01,000 --> 00:00:02,000\n你好\n\n" * 4000).encode()
     invalid_validation = validate_downloaded_subtitle_bytes(invalid, "srt", "demo.srt")
     assert not invalid_validation.valid
     assert invalid_validation.error_type == "CONTENT_VALIDATION_FAILED"
+
+
+def test_validate_downloaded_subtitle_bytes_lenient_still_rejects_chinese_only_content():
+    data = ("1\n00:00:01,000 --> 00:00:02,000\n你好，这是中文字幕\n\n" * 4000).encode()
+    validation = validate_downloaded_subtitle_bytes(data, "srt", "demo.srt", lenient=True)
+    assert not validation.valid
+    assert validation.error_type == "CONTENT_VALIDATION_FAILED"
 

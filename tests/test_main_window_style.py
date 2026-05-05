@@ -1,6 +1,7 @@
 import sys
 
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea, QTableWidget, QTextEdit
+from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea, QTableWidget, QTextEdit
+from qfluentwidgets import FluentWindow
 
 from subtitle_info_collection.gui.main_window import MainWindow
 
@@ -9,16 +10,17 @@ def _app() -> QApplication:
     return QApplication.instance() or QApplication(sys.argv)
 
 
-def test_main_window_uses_professional_tool_chrome(monkeypatch):
+def test_main_window_uses_fluent_navigation_chrome(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     app = _app()
     window = MainWindow()
 
     assert window.windowTitle() == "字幕采集工具"
-    assert window.nav_buttons[0].text() == "工作台"
+    assert isinstance(window, FluentWindow)
+    assert window.navigationInterface is not None
+    assert window.stackedWidget.count() == 7
     assert "QFrame#heroPanel" not in window.styleSheet()
     assert "QLabel#posterBlock" not in window.styleSheet()
-    assert "任务工作台" in window.dashboard_title.text()
 
     window.close()
     app.quit()
@@ -32,20 +34,29 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     style = window.styleSheet()
     assert "QFrame#dangerZone" in style
     assert "QTableWidget#dataTable" in style
-    assert "QTextEdit#logPanel" in style
-    assert "QPushButton#navButton" in style
+    assert "QTextEdit#logArea" in style
+    assert "NavigationInterface" in style
 
-    page_titles = sorted(
-        label.text()
-        for label in window.findChildren(QLabel, "pageTitle")
-    )
-    expected = sorted(["任务工作台", "采集任务", "字幕解析", "历史记录", "设置与维护"])
-    assert page_titles == expected
+    page_names = {
+        window.stackedWidget.widget(index).objectName()
+        for index in range(window.stackedWidget.count())
+    }
+    assert page_names == {
+        "dashboardPage",
+        "collectorPage",
+        "parserPage",
+        "automationPage",
+        "configPage",
+        "historyPage",
+        "settingsPage",
+    }
 
-    assert window.findChild(QFrame, "sidebar") is not None
-    assert window.findChild(QFrame, "dangerZone") is not None
-    assert len(window.findChildren(QTableWidget, "dataTable")) >= 3
-    assert len(window.findChildren(QTextEdit, "logPanel")) >= 2
+    assert len(window.findChildren(QTableWidget, "dataTable")) >= 2
+    assert len(window.findChildren(QTextEdit, "logArea")) >= 2
+    button_texts = {button.text() for button in window.findChildren(QPushButton)}
+    assert "自动化脚本" in button_texts or "执行" in button_texts
+    assert "自动上传经典台词" not in button_texts
+    assert "上传到经典台词" not in button_texts
 
     window.close()
     app.quit()
@@ -59,10 +70,10 @@ def test_professional_pages_fit_existing_desktop_window(monkeypatch):
     window.show()
     app.processEvents()
 
-    for index in range(window.stack.count()):
-        window.switch_page(index)
+    for index in range(window.stackedWidget.count()):
+        window.stackedWidget.setCurrentIndex(index)
         app.processEvents()
-        current = window.stack.currentWidget()
+        current = window.stackedWidget.currentWidget()
         if isinstance(current, QScrollArea):
             assert current.widget().width() <= current.viewport().width()
         else:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
+from ..automation import ClassicLinesAutomationOptions, ClassicLinesAutomationRunner
 from ..local_parser import parse_local_subtitle_file
 from ..models import TaskConfig
 from ..orchestrator import SubtitleCollectionOrchestrator
@@ -130,6 +131,39 @@ class ParserWorker(QThread):
                     "subtitlesPath": str(subtitles_path),
                     "successes": successes,
                     "failures": failures,
+                }
+            )
+
+        try:
+            asyncio.run(_run())
+        except Exception as exc:  # noqa: BLE001
+            self.finished_error.emit(str(exc))
+
+
+class AutomationScriptWorker(QThread):
+    log_message = Signal(str)
+    finished_success = Signal(dict)
+    finished_error = Signal(str)
+
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__()
+        self.data_dir = data_dir
+
+    def run(self) -> None:
+        async def _run() -> None:
+            runner = ClassicLinesAutomationRunner(
+                ClassicLinesAutomationOptions(data_dir=self.data_dir),
+                log=self.log_message.emit,
+            )
+            result = await runner.run()
+            self.finished_success.emit(
+                {
+                    "outputPath": str(result.output_path),
+                    "tokenCachePath": str(result.token_cache_path),
+                    "totalCount": result.total_count,
+                    "pageCount": result.page_count,
+                    "startedAt": result.started_at,
+                    "finishedAt": result.finished_at,
                 }
             )
 

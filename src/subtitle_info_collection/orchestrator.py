@@ -189,15 +189,38 @@ class SubtitleCollectionOrchestrator:
                 self.log(f"[{datetime.now().strftime('%H:%M:%S')}] 命中 {len(sorted_candidates)} 条，推荐：{best.provider}/{best.subtitle_title}")
 
                 if config.download_enabled:
-                    await self._download_best(
-                        best=best,
-                        providers=active_providers,
-                        config=config,
-                        paths=paths,
-                        stats=provider_stats,
-                        failed_records=failed_records,
-                        download_results=download_results,
-                    )
+                    max_download_attempts = min(len(sorted_candidates), 3)
+                    download_ok = False
+                    for attempt_idx in range(max_download_attempts):
+                        candidate_to_download = sorted_candidates[attempt_idx]
+                        if attempt_idx > 0:
+                            self.log(
+                                f"[{datetime.now().strftime('%H:%M:%S')}] 尝试第 {attempt_idx + 1} 个候选："
+                                f"{candidate_to_download.provider}/{candidate_to_download.subtitle_title}"
+                            )
+                        await self._download_best(
+                            best=candidate_to_download,
+                            providers=active_providers,
+                            config=config,
+                            paths=paths,
+                            stats=provider_stats,
+                            failed_records=failed_records,
+                            download_results=download_results,
+                        )
+                        if download_results and any(
+                            r.provider_subtitle_id == candidate_to_download.provider_subtitle_id
+                            for r in download_results
+                        ):
+                            download_ok = True
+                            break
+                        self.log(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] 候选 {attempt_idx + 1} 下载失败，"
+                            f"尝试下一个候选"
+                        )
+                    if not download_ok:
+                        self.log(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] 所有候选字幕下载失败：{movie_name}"
+                        )
 
             result = self._build_result(
                 config=config,
@@ -278,37 +301,61 @@ class SubtitleCollectionOrchestrator:
                 await self._respect_rate_limit(config.request_interval_ms)
                 raw_candidates = await provider.search(movie)
                 provider_valid: list[SubtitleCandidate] = []
+                provider_lenient: list[SubtitleCandidate] = []
                 for candidate in raw_candidates:
                     validation = validate_candidate_metadata(candidate)
-                    if not validation.valid:
-                        provider_stats["filteredCount"] = int(provider_stats["filteredCount"]) + 1
-                        failed_records.append(
-                            FailedRecord(
-                                movie=movie,
-                                movie_name=movie.display_title,
-                                provider=provider.id,
-                                error_type=validation.error_type,
-                                error=validation.reason,
-                                subtitle_title=candidate.subtitle_title,
-                                provider_subtitle_id=candidate.provider_subtitle_id,
-                            )
-                        )
+                    if validation.valid:
+                        candidate.subtitle_format = validation.subtitle_format
+                        provider_valid.append(score_candidate(candidate, movie))
                         continue
-                    candidate.subtitle_format = validation.subtitle_format
-                    provider_valid.append(score_candidate(candidate, movie))
+
+                    lenient_validation = validate_candidate_metadata(candidate, lenient=True)
+                    if lenient_validation.valid:
+                        candidate.subtitle_format = lenient_validation.subtitle_format
+                        provider_lenient.append(score_candidate(candidate, movie))
+                        continue
+
+                    provider_stats["filteredCount"] = int(provider_stats["filteredCount"]) + 1
+                    failed_records.append(
+                        FailedRecord(
+                            movie=movie,
+                            movie_name=movie.display_title,
+                            provider=provider.id,
+                            error_type=validation.error_type,
+                            error=validation.reason,
+                            subtitle_title=candidate.subtitle_title,
+                            provider_subtitle_id=candidate.provider_subtitle_id,
+                        )
+                    )
 
                 if provider_valid:
                     provider_stats["hitCount"] = int(provider_stats["hitCount"]) + len(provider_valid)
                     valid_candidates.extend(provider_valid)
                     if not config.fallback_enabled:
                         break
+                elif provider_lenient:
+                    self.log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 严格校验无命中，"
+                        f"宽松模式命中 {len(provider_lenient)} 条"
+                    )
+                    provider_stats["hitCount"] = int(provider_stats["hitCount"]) + len(provider_lenient)
+                    valid_candidates.extend(provider_lenient)
+                    if not config.fallback_enabled:
+                        break
                 else:
                     provider_stats["noMatchCount"] = int(provider_stats["noMatchCount"]) + 1
+                    self.log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 无匹配字幕"
+                    )
             except Exception as exc:  # noqa: BLE001
                 error_type = classify_exception(exc)
                 provider_stats["errorCount"] = int(provider_stats["errorCount"]) + 1
-                provider_stats["lastError"] = str(exc)
+                error_msg = str(exc) or repr(exc) or error_type
+                provider_stats["lastError"] = error_msg
                 provider_stats["lastErrorType"] = error_type
+                self.log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 搜索异常：{error_msg}"
+                )
                 failed_records.append(
                     FailedRecord(
                         movie=movie,
@@ -344,39 +391,91 @@ class SubtitleCollectionOrchestrator:
                 )
             )
             return
-        try:
-            payloads = await provider.download(
-                best,
-                DownloadContext(
-                    request_interval_ms=config.request_interval_ms,
-                    request_verification=self.request_verification,
-                    log=self.log,
-                ),
-            )
-            base_name = safe_filename(best.movie_title_zh or best.movie_title or best.provider_subtitle_id)
-            saved_paths = save_downloaded_payloads(payloads, paths.download_dir, base_name, best)
-            stats[best.provider]["downloadCount"] = int(stats[best.provider]["downloadCount"]) + len(saved_paths)
-            download_results.append(
-                DownloadResult(
-                    provider=best.provider,
-                    provider_subtitle_id=best.provider_subtitle_id,
-                    subtitle_title=best.subtitle_title,
-                    movie_title=best.movie_title_zh or best.movie_title,
-                    saved_paths=saved_paths,
+
+        max_retries = 2
+        for retry in range(max_retries + 1):
+            try:
+                payloads = await provider.download(
+                    best,
+                    DownloadContext(
+                        request_interval_ms=config.request_interval_ms,
+                        request_verification=self.request_verification,
+                        log=self.log,
+                    ),
                 )
-            )
-        except Exception as exc:  # noqa: BLE001
-            failed_records.append(
-                FailedRecord(
-                    movie=None,
-                    movie_name=best.movie_title_zh or best.movie_title,
-                    provider=best.provider,
-                    error_type=classify_exception(exc),
-                    error=str(exc),
-                    subtitle_title=best.subtitle_title,
-                    provider_subtitle_id=best.provider_subtitle_id,
+                base_name = safe_filename(best.movie_title_zh or best.movie_title or best.provider_subtitle_id)
+                saved_paths = save_downloaded_payloads(payloads, paths.download_dir, base_name, best)
+                stats[best.provider]["downloadCount"] = int(stats[best.provider]["downloadCount"]) + len(saved_paths)
+                download_results.append(
+                    DownloadResult(
+                        provider=best.provider,
+                        provider_subtitle_id=best.provider_subtitle_id,
+                        subtitle_title=best.subtitle_title,
+                        movie_title=best.movie_title_zh or best.movie_title,
+                        saved_paths=saved_paths,
+                    )
                 )
-            )
+                self.log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] 下载成功：{best.provider}/{best.subtitle_title} "
+                    f"→ {', '.join(p.name for p in saved_paths)}"
+                )
+                return
+            except CollectorError as exc:
+                if retry < max_retries and exc.error_type in {
+                    ErrorType.NETWORK_UNREACHABLE,
+                    ErrorType.RATE_LIMITED,
+                    ErrorType.DOWNLOAD_FAILED,
+                }:
+                    wait_seconds = (retry + 1) * 5
+                    self.log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] 下载失败（{exc.error_type}），"
+                        f"{wait_seconds}秒后重试 ({retry + 1}/{max_retries})"
+                    )
+                    await asyncio.sleep(wait_seconds)
+                    continue
+                failed_records.append(
+                    FailedRecord(
+                        movie=None,
+                        movie_name=best.movie_title_zh or best.movie_title,
+                        provider=best.provider,
+                        error_type=classify_exception(exc),
+                        error=str(exc),
+                        subtitle_title=best.subtitle_title,
+                        provider_subtitle_id=best.provider_subtitle_id,
+                    )
+                )
+                self.log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] 下载失败：{best.provider}/{best.subtitle_title} - {exc}"
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                error_type = classify_exception(exc)
+                if retry < max_retries and error_type in {
+                    ErrorType.NETWORK_UNREACHABLE,
+                    ErrorType.RATE_LIMITED,
+                }:
+                    wait_seconds = (retry + 1) * 5
+                    self.log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] 下载异常（{error_type}），"
+                        f"{wait_seconds}秒后重试 ({retry + 1}/{max_retries})"
+                    )
+                    await asyncio.sleep(wait_seconds)
+                    continue
+                failed_records.append(
+                    FailedRecord(
+                        movie=None,
+                        movie_name=best.movie_title_zh or best.movie_title,
+                        provider=best.provider,
+                        error_type=error_type,
+                        error=str(exc),
+                        subtitle_title=best.subtitle_title,
+                        provider_subtitle_id=best.provider_subtitle_id,
+                    )
+                )
+                self.log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] 下载异常：{best.provider}/{best.subtitle_title} - {exc}"
+                )
+                return
 
     def _build_result(
         self,

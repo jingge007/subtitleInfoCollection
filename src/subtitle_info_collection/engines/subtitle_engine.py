@@ -82,8 +82,6 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u8b49': '\u8bc1',
     '\u660e': '\u660e',
     '\u9867': '\u987e',
-    '\u554f': '\u95ee',
-    '\u8cc7': '\u8d44',
     '\u8a0a': '\u8baf',
     '\u5831': '\u62a5',
     '\u544a': '\u544a',
@@ -107,8 +105,6 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u842c': '\u4e07',
     '\u865f': '\u53f7',
     '\u6a19': '\u6807',
-    '\u6e96': '\u51c6',
-    '\u898f': '\u89c4',
     '\u7bc4': '\u8303',
     '\u8cea': '\u8d28',
     '\u91cf': '\u91cf',
@@ -118,13 +114,11 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u96aa': '\u9669',
     '\u7ba1': '\u7ba1',
     '\u7406': '\u7406',
-    '\u767c': '\u53d1',
     '\u5c55': '\u5c55',
     '\u5275': '\u521b',
     '\u65b0': '\u65b0',
     '\u7af6': '\u7ade',
     '\u722d': '\u4e89',
-    '\u512a': '\u4f18',
     '\u52e2': '\u52bf',
     '\u7522': '\u4ea7',
     '\u54c1': '\u54c1',
@@ -138,23 +132,17 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u610f': '\u610f',
     '\u5ea6': '\u5ea6',
     '\u8abf': '\u8c03',
-    '\u67e5': '\u67e5',
     '\u7d71': '\u7edf',
-    '\u8a08': '\u8ba1',
     '\u5206': '\u5206',
     '\u6790': '\u6790',
     '\u8868': '\u8868',
-    '\u5831': '\u62a5',
     '\u904b': '\u8fd0',
     '\u8f38': '\u8f93',
-    '\u7269': '\u7269',
     '\u6d41': '\u6d41',
     '\u5009': '\u4ed3',
     '\u5132': '\u50a8',
     '\u4fdd': '\u4fdd',
-    '\u7ba1': '\u7ba1',
     '\u8655': '\u5904',
-    '\u7406': '\u7406',
     '\u89e3': '\u89e3',
     '\u6c7a': '\u51b3',
     '\u6267': '\u6267',
@@ -168,42 +156,27 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u74b0': '\u73af',
     '\u5883': '\u5883',
     '\u7d93': '\u7ecf',
-    '\u9a57': '\u9a8c',
     '\u50b3': '\u4f20',
-    '\u7d71': '\u7edf',
-    '\u73fe': '\u73b0',
     '\u4ee3': '\u4ee3',
     '\u6280': '\u6280',
     '\u8853': '\u672f',
     '\u5de5': '\u5de5',
     '\u7a0b': '\u7a0b',
     '\u79d1': '\u79d1',
-    '\u5b78': '\u5b66',
     '\u7814': '\u7814',
     '\u7a76': '\u7a76',
-    '\u958b': '\u5f00',
-    '\u767c': '\u53d1',
     '\u8a2d': '\u8bbe',
-    '\u8a08': '\u8ba1',
     '\u88fd': '\u5236',
     '\u9020': '\u9020',
     '\u52a0': '\u52a0',
-    '\u5de5': '\u5de5',
     '\u751f': '\u751f',
-    '\u7522': '\u4ea7',
-    '\u8cea': '\u8d28',
-    '\u6aa2': '\u68c0',
     '\u5305': '\u5305',
     '\u88dd': '\u88c5',
     '\u6e2c': '\u6d4b',
-    '\u8a66': '\u8bd5',
     '\u68c0': '\u68c0',
-    '\u9a57': '\u9a8c',
     '\u9a4c': '\u9a8c',
     '\u6536': '\u6536',
-    '\u767c': '\u53d1',
     '\u8ca8': '\u8d27',
-    '\u8cfc': '\u8d2d',
     '\u8cb7': '\u4e70',
     '\u8ce3': '\u5356',
     '\u4ea4': '\u4ea4',
@@ -211,34 +184,22 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u5408': '\u5408',
     '\u540c': '\u540c',
     '\u5354': '\u534f',
-    '\u8b70': '\u8bae',
     '\u689d': '\u6761',
     '\u6b3e': '\u6b3e',
-    '\u898f': '\u89c4',
     '\u5b9a': '\u5b9a',
-    '\u689d': '\u6761',
     '\u4f8b': '\u4f8b',
     '\u6cd5': '\u6cd5',
-    '\u898f': '\u89c4',
     '\u653f': '\u653f',
     '\u7b56': '\u7b56',
     '\u63aa': '\u63aa',
-    '\u65bd': '\u65bd',
-    '\u884c': '\u884c',
     '\u52d5': '\u52a8',
     '\u806f': '\u8054',
     '\u7e6b': '\u7cfb',
     '\u6e9d': '\u6c9f',
     '\u901a': '\u901a',
-    '\u5354': '\u534f',
-    '\u8abf': '\u8c03',
     '\u914d': '\u914d',
-    '\u5408': '\u5408',
     '\u652f': '\u652f',
     '\u63f4': '\u63f4',
-    '\u8cc7': '\u8d44',
-    '\u63f4': '\u63f4',
-    '\u5354': '\u534f',
     '\u52a9': '\u52a9',
     '\u5e6b': '\u5e2e',
     '\u5fd9': '\u5fd9',
@@ -246,16 +207,10 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u4f9b': '\u4f9b',
     '\u7d66': '\u7ed9',
     '\u4e88': '\u4e88',
-    '\u8f38': '\u8f93',
     '\u5165': '\u5165',
-    '\u8f38': '\u8f93',
     '\u51fa': '\u51fa',
     '\u5b58': '\u5b58',
     '\u53d6': '\u53d6',
-    '\u8655': '\u5904',
-    '\u7406': '\u7406',
-    '\u4fdd': '\u4fdd',
-    '\u5b58': '\u5b58',
     '\u5099': '\u5907',
     '\u4efd': '\u4efd',
     '\u9084': '\u8fd8',
@@ -267,38 +222,26 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u6e05': '\u6e05',
     '\u9664': '\u9664',
     '\u522a': '\u5220',
-    '\u9664': '\u9664',
     '\u64b0': '\u64b0',
-    '\u5beb': '\u5199',
     '\u8d77': '\u8d77',
     '\u8349': '\u8349',
-    '\u5be9': '\u5ba1',
-    '\u8b80': '\u8bfb',
     '\u4fee': '\u4fee',
     '\u6539': '\u6539',
     '\u88dc': '\u8865',
     '\u5145': '\u5145',
     '\u589e': '\u589e',
-    '\u52a0': '\u52a0',
     '\u6e1b': '\u51cf',
     '\u5c11': '\u5c11',
-    '\u4fee': '\u4fee',
     '\u6b63': '\u6b63',
     '\u6821': '\u6821',
-    '\u6b63': '\u6b63',
     '\u8a8d': '\u8ba4',
-    '\u8b49': '\u8bc1',
     '\u78ba': '\u786e',
-    '\u8a8d': '\u8ba4',
-    '\u9a57': '\u9a8c',
-    '\u8b49': '\u8bc1',
     '\u5f9e': '\u4ece',
     '\u7576': '\u5f53',
     '\u7136': '\u7136',
     '\u5f8c': '\u540e',
     '\u88cf': '\u91cc',
     '\u88e1': '\u91cc',
-    '\u842c': '\u4e07',
     '\u885d': '\u51b2',
     '\u885e': '\u51b2',
     '\u885f': '\u51b2',
@@ -310,7 +253,6 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u8865': '\u8865',
     '\u8866': '\u8866',
     '\u8867': '\u8867',
-    '\u8868': '\u8868',
     '\u8869': '\u8869',
     '\u886a': '\u886a',
     '\u886b': '\u886b',
@@ -318,7 +260,6 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u886d': '\u886d',
     '\u886e': '\u886e',
     '\u886f': '\u886f',
-    '\u5169': '\u4e24',
     '\u5169': '\u4e24',
     '\u96d9': '\u53cc',
     '\u723e': '\u5c14',
@@ -330,23 +271,14 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
     '\u9b25': '\u6597',
     '\u8591': '\u535c',
     '\u85c9': '\u85c9',
-    '\u9ebc': '\u4e48',
-    '\u5169': '\u4e24',
-    '\u96d9': '\u53cc',
-    '\u723e': '\u5c14',
-    '\u9ebc': '\u4e48',
-    '\u5152': '\u513f',
-    '\u96f2': '\u4e91',
-    '\u5e7e': '\u51e0',
-    '\u53c3': '\u53c2',
-    '\u9b25': '\u6597',
-    '\u8591': '\u535c',
 }
 
 TRADITIONAL_ONLY_CHARS = frozenset(TRADITIONAL_TO_SIMPLIFIED_MAP.keys())
 
 SUPPORTED_FORMATS = {"ass", "srt"}
-DECODE_ENCODINGS = ["utf-8-sig", "utf-8", "gb18030", "gbk", "utf-16", "utf-16le", "utf-16be"]
+MIN_VALID_SUBTITLE_BYTES = 100 * 1024
+TEXT_DECODE_ENCODINGS = ["utf-8-sig", "utf-8", "gb18030", "gbk"]
+UTF16_DECODE_ENCODINGS = ["utf-16", "utf-16le", "utf-16be"]
 
 SIMPLIFIED_MARKER_RE = re.compile(
     r"(简体|简中|简英|简繁英|中文|中英|双语|chs|zh[-_ ]?cn|simplified|gb2312|gbk|gb18030)",
@@ -417,8 +349,7 @@ def validate_is_simplified_chinese_english(text: str) -> tuple[bool, str]:
         if trad_ratio >= 0.2:
             return False, f"字幕为繁体中文（繁体占比 {trad_ratio:.0%}），非简体中英双语字幕"
     
-    filtered = filter_to_simplified_chinese(text)
-    english_words = re.findall(r'[A-Za-z]{2,}', filtered)
+    english_words = re.findall(r'[A-Za-z]{2,}', text)
     if len(english_words) < 2:
         return False, "未检测到足够的英文内容"
     
@@ -521,8 +452,14 @@ def decode_subtitle_bytes(data: bytes) -> DecodedSubtitle:
     if detected_utf16:
         preferred.append(detected_utf16)
 
+    has_utf16_hint = detected_utf16 or any(encoding.startswith("utf-16") for encoding in preferred)
+    encoding_candidates = [
+        *preferred,
+        *TEXT_DECODE_ENCODINGS,
+        *(UTF16_DECODE_ENCODINGS if has_utf16_hint else []),
+    ]
     candidates = []
-    for encoding in dict.fromkeys([*preferred, *DECODE_ENCODINGS]):
+    for encoding in dict.fromkeys(encoding_candidates):
         content = _decode_with(data, encoding)
         if not content:
             continue
@@ -639,9 +576,9 @@ def _make_entry(
     if not lines:
         return None
     zh_content, en_content = split_bilingual_lines(lines)
-    if not zh_content.strip() or not en_content.strip():
-        return None
     content = "\n".join([item for item in [zh_content, en_content] if item])
+    if not content.strip():
+        return None
     return SubtitleEntry(
         subtitles_id=f"{movie_id or 'unknown'}-{index}",
         movie_id=movie_id,
@@ -732,7 +669,60 @@ def candidate_text(candidate: SubtitleCandidate) -> str:
     return re.sub(r"[_./\\()[\]{}-]+", " ", candidate.metadata_text()).strip()
 
 
-def validate_candidate_metadata(candidate: SubtitleCandidate) -> CandidateValidation:
+ANY_CHINESE_MARKER_RE = re.compile(
+    r"(简体|简中|简英|简繁英|中文|中英|双语|繁体|繁中|chs|cht|zh[-_ ]?cn|zh[-_ ]?tw|"
+    r"chinese|traditional|simplified|big5|gb2312|gbk|gb18030|\bze\b)",
+    re.I,
+)
+
+LANGUAGE_TYPE_BILINGUAL_RE = re.compile(
+    r"(双语|中英|简英|简繁英|chs.*eng|zh.*en|中.*英|英.*中)",
+    re.I,
+)
+
+LANGUAGE_TYPE_CHINESE_RE = re.compile(
+    r"(简体|简中|中文|繁体|繁中|chs|cht|zh|chinese|中文)",
+    re.I,
+)
+
+LANGUAGE_TYPE_ENGLISH_RE = re.compile(
+    r"(英文|英语|英字|eng|english|\ben\b)",
+    re.I,
+)
+
+
+LANGUAGE_TYPE_TRADITIONAL_RE = re.compile(
+    r"(繁体|繁中|cht|zh[-_ ]?tw|traditional|big5)",
+    re.I,
+)
+
+LANGUAGE_TYPE_SIMPLIFIED_RE = re.compile(
+    r"(简体|简中|chs|zh[-_ ]?cn|simplified|gb2312|gbk|gb18030)",
+    re.I,
+)
+
+
+def _check_language_type_bilingual(language_type: str) -> bool:
+    if not language_type:
+        return False
+    return bool(LANGUAGE_TYPE_BILINGUAL_RE.search(language_type))
+
+
+def _check_language_type_has_chinese_and_english(language_type: str) -> bool:
+    if not language_type:
+        return False
+    has_chinese = bool(LANGUAGE_TYPE_CHINESE_RE.search(language_type))
+    has_english = bool(LANGUAGE_TYPE_ENGLISH_RE.search(language_type))
+    if not (has_chinese and has_english):
+        return False
+    has_traditional = bool(LANGUAGE_TYPE_TRADITIONAL_RE.search(language_type))
+    has_simplified = bool(LANGUAGE_TYPE_SIMPLIFIED_RE.search(language_type))
+    if has_traditional and not has_simplified:
+        return False
+    return True
+
+
+def validate_candidate_metadata(candidate: SubtitleCandidate, lenient: bool = False) -> CandidateValidation:
     text = candidate_text(candidate)
     subtitle_format = detect_subtitle_format(candidate.subtitle_format) or detect_subtitle_format(text)
     if subtitle_format not in SUPPORTED_FORMATS:
@@ -743,10 +733,40 @@ def validate_candidate_metadata(candidate: SubtitleCandidate) -> CandidateValida
             subtitle_format=subtitle_format,
         )
 
+    if _check_language_type_bilingual(candidate.language_type):
+        return CandidateValidation(valid=True, subtitle_format=subtitle_format)
+
+    if _check_language_type_has_chinese_and_english(candidate.language_type):
+        return CandidateValidation(valid=True, subtitle_format=subtitle_format)
+
     has_simplified = bool(SIMPLIFIED_MARKER_RE.search(text))
     has_english = bool(ENGLISH_MARKER_RE.search(text))
     has_bilingual = bool(BILINGUAL_MARKER_RE.search(text))
+    has_any_chinese = bool(ANY_CHINESE_MARKER_RE.search(text))
     traditional_only = bool(TRADITIONAL_ONLY_MARKER_RE.search(text)) and not has_simplified
+
+    if has_simplified and (has_english or has_bilingual):
+        return CandidateValidation(valid=True, subtitle_format=subtitle_format)
+
+    if has_bilingual:
+        return CandidateValidation(valid=True, subtitle_format=subtitle_format)
+
+    if lenient:
+        if traditional_only:
+            return CandidateValidation(
+                valid=False,
+                error_type=ErrorType.INVALID_LANGUAGE,
+                reason="候选字幕为繁体中文，非简体中英双语字幕（宽松模式仍排除）",
+                subtitle_format=subtitle_format,
+            )
+        if has_any_chinese or candidate.language_type:
+            return CandidateValidation(valid=True, subtitle_format=subtitle_format)
+        return CandidateValidation(
+            valid=False,
+            error_type=ErrorType.INVALID_LANGUAGE,
+            reason="候选字幕未包含任何中文标记",
+            subtitle_format=subtitle_format,
+        )
 
     if traditional_only or not (has_simplified or has_bilingual) or not (has_english or has_bilingual):
         return CandidateValidation(
@@ -763,6 +783,7 @@ def validate_downloaded_subtitle_bytes(
     data: bytes,
     subtitle_format: str = "",
     file_name: str = "",
+    lenient: bool = False,
 ) -> DownloadValidation:
     normalized_format = (
         detect_subtitle_format(subtitle_format)
@@ -777,8 +798,21 @@ def validate_downloaded_subtitle_bytes(
             subtitle_format=normalized_format,
         )
 
+    if len(data) < MIN_VALID_SUBTITLE_BYTES:
+        return DownloadValidation(
+            valid=False,
+            error_type=ErrorType.CONTENT_VALIDATION_FAILED,
+            reason=(
+                "字幕文件小于 100KB，判定为无效电影字幕"
+                f"（当前 {len(data) / 1024:.1f} KB）"
+            ),
+            subtitle_format=normalized_format,
+        )
+
     decoded = decode_subtitle_bytes(data)
-    if not decoded.content or decoded.replacement_count > 5 or decoded.score < -100:
+    max_replacements = 20 if lenient else 5
+    min_score = -500 if lenient else -100
+    if not decoded.content or decoded.replacement_count > max_replacements or decoded.score < min_score:
         return DownloadValidation(
             valid=False,
             error_type=ErrorType.DECODE_FAILED,
@@ -790,33 +824,44 @@ def validate_downloaded_subtitle_bytes(
 
     entries = parse_subtitle_text(decoded.content, normalized_format, "validation")
     bilingual_count = sum(1 for item in entries if item.zh_content.strip() and item.en_content.strip())
-    if bilingual_count <= 0:
+    chinese_count = sum(1 for item in entries if item.zh_content.strip())
+    english_count = sum(1 for item in entries if item.en_content.strip())
+
+    if bilingual_count > 0:
+        return DownloadValidation(
+            valid=True,
+            subtitle_format=normalized_format,
+            encoding=decoded.encoding,
+            content=decoded.content.lstrip("\ufeff"),
+            bilingual_count=bilingual_count,
+        )
+
+    if chinese_count > 0 and english_count > 0:
+        return DownloadValidation(
+            valid=True,
+            subtitle_format=normalized_format,
+            encoding=decoded.encoding,
+            content=decoded.content.lstrip("\ufeff"),
+            bilingual_count=0,
+        )
+
+    if chinese_count <= 0 and english_count <= 0:
         return DownloadValidation(
             valid=False,
             error_type=ErrorType.CONTENT_VALIDATION_FAILED,
-            reason="下载到的字幕没有同时包含中文和英文对白",
+            reason="下载到的字幕没有包含有效的中文或英文对白",
             subtitle_format=normalized_format,
             encoding=decoded.encoding,
             content=decoded.content,
             bilingual_count=0,
         )
-    
-    simplified_zh = sum(1 for item in entries if item.zh_content.strip())
-    if simplified_zh <= 0:
-        return DownloadValidation(
-            valid=False,
-            error_type=ErrorType.CONTENT_VALIDATION_FAILED,
-            reason="下载到的字幕未包含简体中文内容",
-            subtitle_format=normalized_format,
-            encoding=decoded.encoding,
-            content=decoded.content,
-            bilingual_count=bilingual_count,
-        )
 
     return DownloadValidation(
-        valid=True,
+        valid=False,
+        error_type=ErrorType.CONTENT_VALIDATION_FAILED,
+        reason="下载到的字幕没有同时包含中文和英文对白",
         subtitle_format=normalized_format,
         encoding=decoded.encoding,
-        content=decoded.content.lstrip("\ufeff"),
-        bilingual_count=bilingual_count,
+        content=decoded.content,
+        bilingual_count=0,
     )

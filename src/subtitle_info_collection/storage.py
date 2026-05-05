@@ -151,6 +151,13 @@ class AppStorage:
         with self._connect() as connection:
             connection.execute("delete from task_runs")
 
+    def delete_task_runs_by_ids(self, ids: list[str]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect() as connection:
+            connection.execute(f"delete from task_runs where id in ({placeholders})", ids)
+
     def save_movie(self, movie: MovieInfo) -> None:
         with self._connect() as connection:
             connection.execute(

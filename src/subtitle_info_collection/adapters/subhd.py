@@ -136,6 +136,25 @@ class SubhdProvider:
             result.append(self._make_candidate(match.group(1), title, text, movie, page_url))
         return result
 
+    def _detect_language_type(self, text: str) -> str:
+        labels = []
+        if re.search(r"(双语|中英|简英|简繁英|chs.*eng|ze\b)", text, re.I):
+            labels.append("双语")
+        if re.search(r"(简体|简中|chs|zh[-_ ]?cn|simplified|gb2312|gbk|gb18030)", text, re.I):
+            labels.append("简体")
+        elif re.search(r"(中文|chinese|zh|chi|zho|cn\b)", text, re.I):
+            labels.append("中文")
+        if re.search(r"(繁体|繁中|cht|zh[-_ ]?tw|traditional|big5)", text, re.I):
+            labels.append("繁体")
+        if re.search(r"(英文|英语|英字|english|eng\b|\ben\b)", text, re.I):
+            labels.append("英语")
+        if not labels:
+            if "简" in text:
+                labels.append("简体")
+            if "英" in text:
+                labels.append("英语")
+        return "/".join(labels)
+
     def _make_candidate(
         self,
         subtitle_id: str,
@@ -154,11 +173,7 @@ class SubhdProvider:
             movie_title_zh=movie.title_zh,
             movie_year=movie.year,
             subtitle_title=title,
-            language_type="/".join(
-                label
-                for label in ["双语" if "双语" in text else "", "简体" if "简" in text else "", "英语" if "英" in text else ""]
-                if label
-            ),
+            language_type=self._detect_language_type(text),
             subtitle_format=detect_subtitle_format(text),
             download_count=max(numbers) if numbers else 0,
             detail_url=urljoin(page_url, f"/a/{subtitle_id}"),
