@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -60,6 +61,7 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
 
     assert len(window.findChildren(QTableWidget, "dataTable")) >= 2
     assert len(window.findChildren(QTextEdit, "logArea")) >= 2
+    assert hasattr(window, "copy_automation_log_button")
     unicloud_switch = window.findChild(SwitchButton, "unicloudImportFormatSwitch")
     assert unicloud_switch is not None
     assert unicloud_switch.isChecked()
@@ -67,6 +69,22 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     assert "自动化脚本" in button_texts or "执行" in button_texts
     assert "自动上传经典台词" not in button_texts
     assert "上传到经典台词" not in button_texts
+
+    window.close()
+    app.quit()
+
+
+def test_automation_log_copy_uses_timestamped_content(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = _app()
+    window = MainWindow()
+
+    window.append_automation_log("启动测试")
+    text = window.automation_log.toPlainText()
+    assert re.fullmatch(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] 启动测试", text)
+
+    window.copy_automation_log()
+    assert QApplication.clipboard().text() == text
 
     window.close()
     app.quit()
@@ -97,12 +115,46 @@ def test_package_dist_dir_env_setting_is_documented_and_used():
     root = Path(__file__).resolve().parents[1]
     env_example = (root / ".env.example").read_text(encoding="utf-8")
     build_script = (root / "scripts" / "build_windows.ps1").read_text(encoding="utf-8")
-    spec_file = next(root.glob("*.spec")).read_text(encoding="utf-8")
+    browser_copy_script = (root / "scripts" / "copy_playwright_browsers.ps1").read_text(
+        encoding="utf-8"
+    )
+    spec_files = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in root.glob("*.spec")
+    }
+    package_spec = spec_files["字幕采集工具.spec"]
 
     assert "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR=" in env_example
     assert "推荐填写最终目录" in env_example
     assert "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR" in build_script
     assert "--distpath" in build_script
     assert "--specpath" in build_script
-    assert "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR" in spec_file
-    assert "CONF['distpath']" in spec_file
+    assert "PLAYWRIGHT_BROWSERS_PATH" in build_script
+    assert "ms-playwright" in build_script
+    assert "playwrightBrowserSourcePath" in build_script
+    assert ".local-browsers" in build_script
+    assert "chrome-headless-shell.exe" in build_script
+    assert "playwright\\driver\\package\\.local-browsers" in build_script
+    assert "--clean" in build_script
+    assert "copy_playwright_browsers.ps1" in build_script
+    assert "Copy-PlaywrightBrowserCache" in build_script
+    assert "Copy-ItemWithRetry" in browser_copy_script
+    assert "Get-ChildItem -LiteralPath $SourcePath -Recurse -File" in browser_copy_script
+    assert "Start-Sleep -Seconds 2" in browser_copy_script
+    assert "Start-Sleep -Seconds 5" in browser_copy_script
+    assert "chrome_elf.dll" in browser_copy_script
+    assert "D3DCompiler_47.dll" in browser_copy_script
+    assert "cmd /d /c" in browser_copy_script
+    assert "copy /Y" in browser_copy_script
+    assert ".copytmp" in browser_copy_script
+    assert "复制 Playwright 浏览器失败" in build_script
+    assert "Get-CimInstance Win32_Process" in build_script
+    assert "CommandLine" in build_script
+    assert "$LASTEXITCODE" in build_script
+    assert "命令执行失败" in build_script
+    assert "占用打包目录" in build_script
+    assert "请先关闭正在运行的旧版程序" in build_script
+    assert "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR" in package_spec
+    assert "CONF['distpath']" in package_spec
+    assert all("ms-playwright" in content for content in spec_files.values())
+    assert all(".local-browsers" in content for content in spec_files.values())

@@ -969,6 +969,13 @@ class MainWindow(FluentWindow):
         stats_card.viewLayout.addLayout(stats_row)
 
         log_card = self._card("日志")
+        self.copy_automation_log_button = TransparentToolButton(FIF.COPY, self)
+        self.copy_automation_log_button.setFixedSize(28, 28)
+        self.copy_automation_log_button.setToolTip("复制日志")
+        self.copy_automation_log_button.clicked.connect(self.copy_automation_log)
+        log_card.headerLayout.addStretch(1)
+        log_card.headerLayout.addWidget(self.copy_automation_log_button)
+
         self.automation_log = TextEdit(self)
         self.automation_log.setReadOnly(True)
         self.automation_log.setObjectName("logArea")
@@ -1411,7 +1418,29 @@ class MainWindow(FluentWindow):
 
     def append_automation_log(self, message: str) -> None:
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.automation_log.append(f"[{stamp}] {message}")
+        lines = str(message).splitlines() or [""]
+        for line in lines:
+            self.automation_log.append(f"[{stamp}] {line}")
+
+    def copy_automation_log(self) -> None:
+        text = self.automation_log.toPlainText()
+        if not text.strip():
+            InfoBar.info(
+                "暂无日志",
+                "当前没有可复制的自动化脚本日志。",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=2000,
+            )
+            return
+        QApplication.clipboard().setText(text)
+        InfoBar.success(
+            "已复制",
+            "自动化脚本日志已复制到剪贴板。",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=2000,
+        )
 
     def automation_finished(self, result: dict) -> None:
         self.automation_run_button.setEnabled(True)

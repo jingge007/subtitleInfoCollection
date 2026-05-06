@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from pathlib import Path
 
+import playwright
 from PyInstaller.config import CONF
 from PyInstaller.utils.hooks import collect_all
 
@@ -44,6 +46,26 @@ def resolve_package_dist_paths() -> tuple[Path | None, Path | None]:
     return configured_path, configured_path / APP_NAME
 
 
+def collect_playwright_local_browsers() -> list[tuple[str, str]]:
+    package_browsers_path = (
+        Path(playwright.__file__).resolve().parent
+        / 'driver'
+        / 'package'
+        / '.local-browsers'
+    )
+    default_cache_path = Path(os.environ.get('LOCALAPPDATA', '')) / 'ms-playwright'
+    for browsers_path in (package_browsers_path, default_cache_path):
+        if not browsers_path.exists():
+            continue
+        has_chromium = next(browsers_path.rglob('chrome.exe'), None)
+        has_headless_shell = next(browsers_path.rglob('chrome-headless-shell.exe'), None)
+        if has_chromium and has_headless_shell:
+            return [(str(browsers_path), 'playwright/driver/package/.local-browsers')]
+    print(f'未找到完整的 Playwright 浏览器目录：{package_browsers_path} 或 {default_cache_path}')
+    print('请先运行：$env:PLAYWRIGHT_BROWSERS_PATH="0"; python -m playwright install chromium')
+    return []
+
+
 package_dist_root, package_output_path = resolve_package_dist_paths()
 if package_dist_root:
     CONF['distpath'] = str(package_dist_root)
@@ -56,6 +78,7 @@ tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('playwright')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+datas += collect_playwright_local_browsers()
 
 
 a = Analysis(
