@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from ..automation import ClassicLinesAutomationOptions, ClassicLinesAutomationRunner
-from ..local_parser import parse_local_subtitle_file
+from ..local_parser import parse_local_subtitle_file, write_subtitle_export_files
 from ..models import TaskConfig
 from ..orchestrator import SubtitleCollectionOrchestrator
 from ..storage import AppStorage
@@ -76,11 +76,18 @@ class ParserWorker(QThread):
     finished_success = Signal(dict)
     finished_error = Signal(str)
 
-    def __init__(self, files: list[Path], output_dir: Path, tmdb_token: str = "") -> None:
+    def __init__(
+        self,
+        files: list[Path],
+        output_dir: Path,
+        tmdb_token: str = "",
+        unicloud_import_format: bool = True,
+    ) -> None:
         super().__init__()
         self.files = files
         self.output_dir = output_dir
         self.tmdb_token = tmdb_token
+        self.unicloud_import_format = unicloud_import_format
 
     def run(self) -> None:
         async def _run() -> None:
@@ -116,19 +123,24 @@ class ParserWorker(QThread):
 
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             movies_path = self.output_dir / f"{stamp}-movies.json"
-            subtitles_path = self.output_dir / f"{stamp}-subtitles.json"
             movies_path.write_text(
                 json.dumps(list(movies_by_id.values()), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            subtitles_path.write_text(
-                json.dumps(subtitles, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            subtitles_export = write_subtitle_export_files(
+                subtitles,
+                self.output_dir,
+                stamp,
+                unicloud_import_format=self.unicloud_import_format,
             )
             self.finished_success.emit(
                 {
                     "moviesPath": str(movies_path),
-                    "subtitlesPath": str(subtitles_path),
+                    "subtitlesPath": str(subtitles_export.paths[0]),
+                    "subtitlesPaths": [str(path) for path in subtitles_export.paths],
+                    "subtitlesFormat": subtitles_export.export_format,
+                    "subtitleSplitLimitBytes": subtitles_export.split_limit_bytes,
+                    "subtitleOversizedRecords": subtitles_export.oversized_records,
                     "successes": successes,
                     "failures": failures,
                 }

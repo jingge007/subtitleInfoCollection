@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMessageBox,
+    QScrollArea,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -45,6 +46,7 @@ from qfluentwidgets import (
     SpinBox,
     StrongBodyLabel,
     SubtitleLabel,
+    SwitchButton,
     TextEdit,
     TransparentToolButton,
     setTheme,
@@ -77,6 +79,14 @@ from .styles import (
 from .worker import AutomationScriptWorker, CollectorWorker, ParserWorker
 
 
+DEFAULT_WINDOW_WIDTH = 1100
+DEFAULT_WINDOW_HEIGHT = 580
+PAGE_MARGINS = (18, 8, 18, 8)
+PAGE_SPACING = 8
+CARD_VIEW_MARGINS = (14, 6, 14, 10)
+CARD_HEADER_MARGINS = (14, 8, 14, 0)
+
+
 class MainWindow(FluentWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -92,7 +102,7 @@ class MainWindow(FluentWindow):
         self.latest_automation_output_path: Path | None = None
 
         self.setWindowTitle("字幕采集工具")
-        self.resize(1100, 580)
+        self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         self._set_app_icon()
         self._apply_theme()
 
@@ -153,30 +163,55 @@ class MainWindow(FluentWindow):
         card = HeaderCardWidget(self)
         if title:
             card.setTitle(title)
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        card.headerLayout.setContentsMargins(*CARD_HEADER_MARGINS)
+        card.viewLayout.setContentsMargins(*CARD_VIEW_MARGINS)
+        card.viewLayout.setSpacing(PAGE_SPACING)
         return card
+
+    def _page_layout(self, page: QWidget) -> QVBoxLayout:
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(*PAGE_MARGINS)
+        layout.setSpacing(PAGE_SPACING)
+        return layout
+
+    def _scroll_page(self, object_name: str) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
+        scroll_area = QScrollArea(self)
+        scroll_area.setObjectName(object_name)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        content = QWidget()
+        content.setObjectName(f"{object_name}Content")
+        content.setMinimumWidth(0)
+        content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout = self._page_layout(content)
+        scroll_area.setWidget(content)
+        return scroll_area, content, layout
 
     def _metric_card(self, icon: FIF, label: str, color: str = PRIMARY) -> tuple[CardWidget, QLabel, QLabel]:
         card = CardWidget(self)
-        card.setFixedHeight(60)
+        card.setFixedHeight(52)
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(16, 10, 16, 10)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(10)
 
         icon_frame = QFrame()
-        icon_frame.setFixedSize(44, 44)
+        icon_frame.setFixedSize(36, 36)
         icon_frame.setStyleSheet(
             f"background: {color}15; border-radius: 10px;"
         )
         icon_layout = QVBoxLayout(icon_frame)
         icon_layout.setContentsMargins(0, 0, 0, 0)
         icon_label = QLabel()
-        icon_label.setFixedSize(44, 44)
+        icon_label.setFixedSize(36, 36)
         icon_label.setAlignment(Qt.AlignCenter)
         from PySide6.QtGui import QFont
         font = QFont()
-        font.setPixelSize(20)
+        font.setPixelSize(18)
         icon_label.setFont(font)
         icon_map = {
             FIF.CALENDAR: "\U0001F4C5",
@@ -189,9 +224,9 @@ class MainWindow(FluentWindow):
         icon_layout.addWidget(icon_label)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(2)
+        text_col.setSpacing(0)
         value = QLabel("0")
-        value.setStyleSheet(f"font-size: 26px; font-weight: 700; color: {TEXT};")
+        value.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {TEXT};")
         caption = CaptionLabel(label)
         caption.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
         text_col.addWidget(value)
@@ -224,8 +259,8 @@ class MainWindow(FluentWindow):
         card = CardWidget(self)
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(3)
         heading = StrongBodyLabel(title)
         heading.setStyleSheet(f"font-size: 13px; color: {TEXT};")
         badge = self._status_badge(value, ok)
@@ -252,7 +287,7 @@ class MainWindow(FluentWindow):
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setWordWrap(False)
         table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(36)
+        table.verticalHeader().setDefaultSectionSize(32)
         table.horizontalHeader().setHighlightSections(False)
 
     # ── Dashboard Page ────────────────────────────────────────────────
@@ -260,9 +295,7 @@ class MainWindow(FluentWindow):
     def _build_task_center_page(self) -> QWidget:
         page = QWidget()
         page.setObjectName("dashboardPage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 12, 24, 12)
-        layout.setSpacing(10)
+        layout = self._page_layout(page)
 
         header = QHBoxLayout()
         header.setSpacing(12)
@@ -508,11 +541,7 @@ class MainWindow(FluentWindow):
     # ── Config Page ────────────────────────────────────────────────────
 
     def _build_config_page(self) -> QWidget:
-        page = QWidget()
-        page.setObjectName("configPage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 12, 24, 12)
-        layout.setSpacing(10)
+        page, _content, layout = self._scroll_page("configPage")
 
         header = QHBoxLayout()
         header.setSpacing(12)
@@ -529,17 +558,17 @@ class MainWindow(FluentWindow):
 
         config_card = self._card("配置预检")
         self.config_cards_layout = QGridLayout()
-        self.config_cards_layout.setSpacing(10)
+        self.config_cards_layout.setSpacing(PAGE_SPACING)
         config_card.viewLayout.addLayout(self.config_cards_layout)
 
         env_overview_card = self._card("环境概览")
         self.env_items_layout = QVBoxLayout()
-        self.env_items_layout.setSpacing(8)
+        self.env_items_layout.setSpacing(6)
         env_overview_card.viewLayout.addLayout(self.env_items_layout)
 
         tips_card = self._card("配置提示")
         tips_inner = QVBoxLayout()
-        tips_inner.setSpacing(8)
+        tips_inner.setSpacing(6)
         tips_items = [
             (".env 密钥", "TMDB_TOKEN、ASSRT_TOKEN、OpenSubtitles 账号均不在界面编辑，请直接修改 .env 文件。"),
             ("代理与间隔", "HTTP_PROXY、HTTPS_PROXY、SUBTITLE_REQUEST_INTERVAL_MS 从 .env 读取。"),
@@ -559,9 +588,13 @@ class MainWindow(FluentWindow):
             tips_inner.addLayout(tip_row)
         tips_card.viewLayout.addLayout(tips_inner)
 
+        overview_row = QHBoxLayout()
+        overview_row.setSpacing(PAGE_SPACING)
+        overview_row.addWidget(env_overview_card, 3)
+        overview_row.addWidget(tips_card, 2)
+
         layout.addWidget(config_card)
-        layout.addWidget(env_overview_card, 1)
-        layout.addWidget(tips_card)
+        layout.addLayout(overview_row, 1)
         return page
 
     def refresh_config_page(self) -> None:
@@ -584,10 +617,10 @@ class MainWindow(FluentWindow):
         for name, configured, desc in env_items:
             row_widget = CardWidget(self)
             row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            row_widget.setFixedHeight(44)
+            row_widget.setFixedHeight(38)
             row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(14, 8, 14, 8)
-            row_layout.setSpacing(12)
+            row_layout.setContentsMargins(12, 6, 12, 6)
+            row_layout.setSpacing(10)
             name_label = StrongBodyLabel(name)
             name_label.setFixedWidth(120)
             name_label.setStyleSheet(f"font-size: 13px; color: {TEXT};")
@@ -631,9 +664,7 @@ class MainWindow(FluentWindow):
     def _build_collector_tab(self) -> QWidget:
         page = QWidget()
         page.setObjectName("collectorPage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 12, 24, 12)
-        layout.setSpacing(10)
+        layout = self._page_layout(page)
 
         header = QHBoxLayout()
         header.setSpacing(12)
@@ -654,10 +685,10 @@ class MainWindow(FluentWindow):
 
         params_card = self._card("采集参数")
         params_layout = QVBoxLayout()
-        params_layout.setSpacing(10)
+        params_layout.setSpacing(8)
 
         row1 = QHBoxLayout()
-        row1.setSpacing(16)
+        row1.setSpacing(12)
         year_label = StrongBodyLabel("年份")
         self.year_spin = SpinBox(self)
         self.year_spin.setRange(1900, datetime.now().year + 1)
@@ -670,13 +701,13 @@ class MainWindow(FluentWindow):
         self.limit_spin.setFixedWidth(180)
         row1.addWidget(year_label)
         row1.addWidget(self.year_spin)
-        row1.addSpacing(40)
+        row1.addSpacing(24)
         row1.addWidget(limit_label)
         row1.addWidget(self.limit_spin)
         row1.addStretch(1)
 
         row2 = QHBoxLayout()
-        row2.setSpacing(16)
+        row2.setSpacing(12)
         strategy_label = StrongBodyLabel("策略")
         self.fallback_check = CheckBox("源兜底", self)
         self.fallback_check.setChecked(True)
@@ -685,7 +716,7 @@ class MainWindow(FluentWindow):
         row2.addWidget(strategy_label)
         row2.addWidget(self.fallback_check)
         row2.addWidget(self.download_check)
-        row2.addSpacing(40)
+        row2.addSpacing(24)
         source_label = StrongBodyLabel("字幕源")
         disabled_providers = set(self.settings.provider_disabled)
         self.subhd_check = CheckBox("SubHD", self)
@@ -713,13 +744,13 @@ class MainWindow(FluentWindow):
 
         status_card = self._card("任务状态")
         status_inner = QVBoxLayout()
-        status_inner.setSpacing(10)
+        status_inner.setSpacing(8)
 
         progress_and_stats = QHBoxLayout()
-        progress_and_stats.setSpacing(12)
+        progress_and_stats.setSpacing(8)
 
         self.collect_progress_ring = ProgressRing(self)
-        self.collect_progress_ring.setFixedSize(56, 56)
+        self.collect_progress_ring.setFixedSize(48, 48)
         self.collect_progress_ring.setRange(0, 100)
         self.collect_progress_ring.setValue(0)
         self.collect_progress_ring.setStrokeWidth(5)
@@ -749,14 +780,14 @@ class MainWindow(FluentWindow):
                 f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
             )
             stat_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            stat_card.setFixedHeight(56)
+            stat_card.setFixedHeight(48)
             stat_layout = QVBoxLayout(stat_card)
-            stat_layout.setContentsMargins(8, 6, 8, 6)
-            stat_layout.setSpacing(2)
+            stat_layout.setContentsMargins(8, 5, 8, 5)
+            stat_layout.setSpacing(1)
             stat_layout.setAlignment(Qt.AlignCenter)
             value_label = QLabel("0")
             value_label.setAlignment(Qt.AlignCenter)
-            value_label.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {color};")
+            value_label.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
             caption_label = QLabel(label_text)
             caption_label.setAlignment(Qt.AlignCenter)
             caption_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
@@ -794,9 +825,7 @@ class MainWindow(FluentWindow):
     def _build_parser_tab(self) -> QWidget:
         page = QWidget()
         page.setObjectName("parserPage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 12, 24, 12)
-        layout.setSpacing(10)
+        layout = self._page_layout(page)
 
         header = QHBoxLayout()
         header.setSpacing(12)
@@ -813,7 +842,7 @@ class MainWindow(FluentWindow):
 
         action_card = self._card("文件选择")
         actions = QHBoxLayout()
-        actions.setSpacing(12)
+        actions.setSpacing(10)
         self.parse_button = PrimaryPushButton("选择 SRT/ASS 文件", self)
         self.parse_button.setIcon(FIF.FOLDER_ADD)
         self.parse_button.clicked.connect(self.select_parse_files)
@@ -822,6 +851,25 @@ class MainWindow(FluentWindow):
         actions.addWidget(self.parse_button)
         actions.addWidget(self.parse_status, 1)
         action_card.viewLayout.addLayout(actions)
+
+        export_options = QHBoxLayout()
+        export_options.setSpacing(10)
+        export_text = QVBoxLayout()
+        export_text.setSpacing(2)
+        export_title = StrongBodyLabel("uniCloud 导入格式")
+        export_desc = CaptionLabel("开启后字幕 JSON 使用控制台 jsonl 规格导出，并按 45MB 自动拆分")
+        export_desc.setStyleSheet(f"color: {TEXT_PLACEHOLDER};")
+        export_desc.setWordWrap(True)
+        export_text.addWidget(export_title)
+        export_text.addWidget(export_desc)
+        self.unicloud_import_switch = SwitchButton(self)
+        self.unicloud_import_switch.setObjectName("unicloudImportFormatSwitch")
+        self.unicloud_import_switch.setOnText("开启")
+        self.unicloud_import_switch.setOffText("关闭")
+        self.unicloud_import_switch.setChecked(True)
+        export_options.addLayout(export_text, 1)
+        export_options.addWidget(self.unicloud_import_switch)
+        action_card.viewLayout.addLayout(export_options)
 
         result_card = self._card("解析结果")
         self.parse_table = QTableWidget(0, 6, self)
@@ -855,9 +903,7 @@ class MainWindow(FluentWindow):
     def _build_automation_tab(self) -> QWidget:
         page = QWidget()
         page.setObjectName("automationPage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 12, 24, 12)
-        layout.setSpacing(10)
+        layout = self._page_layout(page)
 
         header = QHBoxLayout()
         header.setSpacing(12)
@@ -874,7 +920,7 @@ class MainWindow(FluentWindow):
 
         action_card = self._card("33 台词今日台词")
         action_row = QHBoxLayout()
-        action_row.setSpacing(12)
+        action_row.setSpacing(10)
         self.automation_run_button = PrimaryPushButton("执行", self)
         self.automation_run_button.setIcon(FIF.PLAY)
         self.automation_run_button.clicked.connect(self.start_automation_script)
@@ -895,7 +941,7 @@ class MainWindow(FluentWindow):
 
         stats_card = self._card("统计")
         stats_row = QHBoxLayout()
-        stats_row.setSpacing(10)
+        stats_row.setSpacing(8)
         self.automation_stat_labels: dict[str, QLabel] = {}
         for key, caption, color in [
             ("total", "采集条数", GREEN),
@@ -908,11 +954,11 @@ class MainWindow(FluentWindow):
             )
             stat.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             stat_layout = QVBoxLayout(stat)
-            stat_layout.setContentsMargins(12, 10, 12, 10)
+            stat_layout.setContentsMargins(10, 7, 10, 7)
             value = QLabel("0" if key != "output" else "-")
             value.setAlignment(Qt.AlignCenter)
             value.setWordWrap(True)
-            value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
+            value.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {color};")
             label = CaptionLabel(caption)
             label.setAlignment(Qt.AlignCenter)
             label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
@@ -937,9 +983,7 @@ class MainWindow(FluentWindow):
     def _build_history_tab(self) -> QWidget:
         page = QWidget()
         page.setObjectName("historyPage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 12, 24, 12)
-        layout.setSpacing(10)
+        layout = self._page_layout(page)
 
         header = QHBoxLayout()
         header.setSpacing(12)
@@ -954,7 +998,7 @@ class MainWindow(FluentWindow):
         header.addLayout(title_col, 1)
 
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(10)
+        toolbar.setSpacing(8)
         self.history_search = SearchLineEdit(self)
         self.history_search.setPlaceholderText("搜索任务...")
         self.history_search.setFixedWidth(240)
@@ -1044,11 +1088,7 @@ class MainWindow(FluentWindow):
     # ── Settings Tab ──────────────────────────────────────────────────
 
     def _build_settings_tab(self) -> QWidget:
-        page = QWidget()
-        page.setObjectName("settingsPage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 12, 24, 12)
-        layout.setSpacing(10)
+        page, _content, layout = self._scroll_page("settingsPage")
 
         header = QHBoxLayout()
         header.setSpacing(12)
@@ -1065,9 +1105,9 @@ class MainWindow(FluentWindow):
 
         config_card = self._card("本机配置")
         config_inner = QVBoxLayout()
-        config_inner.setSpacing(8)
+        config_inner.setSpacing(6)
         cfg_row = QHBoxLayout()
-        cfg_row.setSpacing(12)
+        cfg_row.setSpacing(10)
         cfg_label = StrongBodyLabel("数据目录")
         cfg_label.setFixedWidth(70)
         self.data_dir_input = LineEdit(self)
@@ -1084,7 +1124,7 @@ class MainWindow(FluentWindow):
         cfg_row.addWidget(save_button)
 
         env_row = QHBoxLayout()
-        env_row.setSpacing(12)
+        env_row.setSpacing(10)
         env_label = StrongBodyLabel(".env 路径")
         env_label.setFixedWidth(70)
         env_path_text = LineEdit(self)
@@ -1103,13 +1143,13 @@ class MainWindow(FluentWindow):
 
         maintenance_card = self._card("数据维护")
         maintenance_layout = QHBoxLayout()
-        maintenance_layout.setSpacing(16)
+        maintenance_layout.setSpacing(10)
 
         reset_card = CardWidget(self)
         reset_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         reset_inner = QVBoxLayout(reset_card)
-        reset_inner.setContentsMargins(20, 16, 20, 16)
-        reset_inner.setSpacing(8)
+        reset_inner.setContentsMargins(14, 10, 14, 10)
+        reset_inner.setSpacing(6)
         reset_header = QHBoxLayout()
         reset_header.setSpacing(10)
         reset_icon_label = QLabel("\U0001F4CB")
@@ -1138,8 +1178,8 @@ class MainWindow(FluentWindow):
         delete_card = CardWidget(self)
         delete_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         delete_inner = QVBoxLayout(delete_card)
-        delete_inner.setContentsMargins(20, 16, 20, 16)
-        delete_inner.setSpacing(8)
+        delete_inner.setContentsMargins(14, 10, 14, 10)
+        delete_inner.setSpacing(6)
         delete_header = QHBoxLayout()
         delete_header.setSpacing(10)
         delete_icon_label = QLabel("\U0001F5D1\uFE0F")
@@ -1478,6 +1518,7 @@ class MainWindow(FluentWindow):
             validated_files,
             output_dir,
             env_settings.tmdb_token,
+            self.unicloud_import_switch.isChecked(),
         )
         self.parser_worker.log_message.connect(self.parse_log.append)
         self.parser_worker.file_parsed.connect(self.add_parse_row)
@@ -1513,7 +1554,24 @@ class MainWindow(FluentWindow):
         )
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.parse_log.append(f"[{stamp}] 电影 JSON：{result.get('moviesPath')}")
-        self.parse_log.append(f"[{stamp}] 字幕 JSON：{result.get('subtitlesPath')}")
+        subtitles_paths = result.get("subtitlesPaths") or [result.get("subtitlesPath")]
+        format_label = (
+            "uniCloud jsonl"
+            if result.get("subtitlesFormat") == "unicloud-jsonl"
+            else "JSON 数组"
+        )
+        if len(subtitles_paths) > 1:
+            self.parse_log.append(
+                f"[{stamp}] 字幕 JSON：{len(subtitles_paths)} 个文件（{format_label}，45MB 拆分）"
+            )
+            for path in subtitles_paths:
+                self.parse_log.append(f"[{stamp}] - {path}")
+        else:
+            self.parse_log.append(f"[{stamp}] 字幕 JSON：{subtitles_paths[0]}（{format_label}）")
+        if result.get("subtitleOversizedRecords"):
+            self.parse_log.append(
+                f"[{stamp}] 提示：{result.get('subtitleOversizedRecords')} 条字幕记录单条超过拆分限制，已单独写入文件"
+            )
         self.refresh_task_center()
 
     def parse_failed(self, message: str) -> None:

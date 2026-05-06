@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .adapters.tmdb import TmdbClient
@@ -12,6 +13,8 @@ from .engines.subtitle_engine import (
     validate_is_simplified_chinese_english,
 )
 from .models import MovieInfo, SubtitleEntry
+
+UNICLOUD_IMPORT_SPLIT_BYTES = 45 * 1024 * 1024
 
 NOISE_RE = re.compile(
     r"\b(?:2160p|1080p|720p|480p|4k|hdr|hdrip|brrip|bluray|blu-?ray|bdrip|"
@@ -51,6 +54,79 @@ class ParsedSubtitleFile:
         }
 
 
+@dataclass(slots=True)
+class SubtitleExportResult:
+    paths: list[Path]
+    export_format: str
+    split_limit_bytes: int | None = None
+    oversized_records: int = 0
+
+
+def write_subtitle_export_files(
+    subtitles: list[dict[str, object]],
+    output_dir: Path,
+    stamp: str,
+    *,
+    unicloud_import_format: bool = True,
+    split_limit_bytes: int = UNICLOUD_IMPORT_SPLIT_BYTES,
+) -> SubtitleExportResult:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_path = output_dir / f"{stamp}-subtitles.json"
+
+    if not unicloud_import_format:
+        base_path.write_text(
+            json.dumps(subtitles, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return SubtitleExportResult(paths=[base_path], export_format="json-array")
+
+    if split_limit_bytes <= 0:
+        raise ValueError("split_limit_bytes must be greater than 0")
+
+    chunks: list[list[bytes]] = []
+    current_chunk: list[bytes] = []
+    current_size = 0
+    oversized_records = 0
+
+    for subtitle in subtitles:
+        line = (
+            json.dumps(subtitle, ensure_ascii=False, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        if len(line) > split_limit_bytes:
+            oversized_records += 1
+        if current_chunk and current_size + len(line) > split_limit_bytes:
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_size = 0
+        current_chunk.append(line)
+        current_size += len(line)
+
+    if current_chunk or not subtitles:
+        chunks.append(current_chunk)
+
+    if len(chunks) == 1:
+        base_path.write_bytes(b"".join(chunks[0]))
+        return SubtitleExportResult(
+            paths=[base_path],
+            export_format="unicloud-jsonl",
+            split_limit_bytes=split_limit_bytes,
+            oversized_records=oversized_records,
+        )
+
+    paths: list[Path] = []
+    for index, chunk in enumerate(chunks, start=1):
+        path = output_dir / f"{stamp}-subtitles-{index}.json"
+        path.write_bytes(b"".join(chunk))
+        paths.append(path)
+
+    return SubtitleExportResult(
+        paths=paths,
+        export_format="unicloud-jsonl",
+        split_limit_bytes=split_limit_bytes,
+        oversized_records=oversized_records,
+    )
+
+
 def build_movie_search_keywords(filename: str) -> list[str]:
     base_name = re.sub(r"\.[^.]+$", "", Path(filename).name)
     spaced = re.sub(r"[._-]+", " ", base_name)
@@ -78,6 +154,12 @@ def _fallback_movie(path: Path) -> MovieInfo:
     title = build_movie_search_keywords(path.name)[-1] if build_movie_search_keywords(path.name) else path.stem
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "local"
     return MovieInfo(movie_id=f"local-{slug}", title=title, original_title=title, title_zh="")
+
+
+def _normalize_local_movie_id(movie: MovieInfo) -> MovieInfo:
+    if movie.movie_id.startswith("tmdb-"):
+        return replace(movie, movie_id=movie.movie_id.removeprefix("tmdb-"))
+    return movie
 
 
 async def _match_movie(path: Path, tmdb_token: str = "") -> tuple[MovieInfo, str]:
@@ -125,6 +207,7 @@ async def parse_local_subtitle_file(path: Path, tmdb_token: str = "") -> ParsedS
         raise ValueError(f"字幕校验失败：{validation_msg}")
 
     movie, keyword = await _match_movie(path, tmdb_token)
+    movie = _normalize_local_movie_id(movie)
     parsed = parse_subtitle_text(decoded.content, suffix, movie.movie_id)
     original_count = len(parsed)
     filtered = [
