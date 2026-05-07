@@ -353,6 +353,7 @@ def failure_reason_cn(error_type: str, provider: str = "", raw: str = "") -> str
         "NO_MATCH": "没有找到符合要求的简体中文 + 英文双语 ass/srt 字幕。",
         "PARSE_FAILED": "页面或接口结构异常，目标站点可能已经变化。",
         "DOWNLOAD_BLOCKED": "下载被阻止，可能需要登录、验证码或被站点拦截。",
+        "DOWNLOAD_QUOTA_EXCEEDED": "OpenSubtitles 下载额度已用完或账号权限不足，请等待额度重置、升级账号，或暂时禁用该字幕源下载。",
         "DOWNLOAD_FAILED": "字幕下载失败，可能是下载链接失效、压缩包异常或保存失败。",
         "PROVIDER_DISABLED": "字幕源未启用或缺少必要配置。",
         "VERIFICATION_REQUIRED": "需要验证码验证，本条字幕未能自动完成下载。",

@@ -9,6 +9,7 @@ class ErrorType:
     NO_MATCH = "NO_MATCH"
     PARSE_FAILED = "PARSE_FAILED"
     DOWNLOAD_BLOCKED = "DOWNLOAD_BLOCKED"
+    DOWNLOAD_QUOTA_EXCEEDED = "DOWNLOAD_QUOTA_EXCEEDED"
     DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
     PROVIDER_DISABLED = "PROVIDER_DISABLED"
     VERIFICATION_REQUIRED = "VERIFICATION_REQUIRED"
@@ -24,6 +25,7 @@ ERROR_TYPE_LABELS = {
     ErrorType.NO_MATCH: "没有匹配字幕",
     ErrorType.PARSE_FAILED: "解析失败",
     ErrorType.DOWNLOAD_BLOCKED: "下载被阻止",
+    ErrorType.DOWNLOAD_QUOTA_EXCEEDED: "下载额度已用完",
     ErrorType.DOWNLOAD_FAILED: "下载失败",
     ErrorType.PROVIDER_DISABLED: "字幕源不可用",
     ErrorType.VERIFICATION_REQUIRED: "需要手动验证",
@@ -73,7 +75,9 @@ def classify_exception(error: Exception) -> str:
         return error.error_type
 
     message = str(error).lower()
-    if any(token in message for token in ["429", "rate", "quota", "too many"]):
+    if any(token in message for token in ["quota", "remaining downloads", "download limit"]):
+        return ErrorType.DOWNLOAD_QUOTA_EXCEEDED
+    if any(token in message for token in ["429", "rate", "too many"]):
         return ErrorType.RATE_LIMITED
     if any(token in message for token in ["captcha", "verification", "login", "403", "forbidden"]):
         return ErrorType.DOWNLOAD_BLOCKED

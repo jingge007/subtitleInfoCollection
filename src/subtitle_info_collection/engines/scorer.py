@@ -5,9 +5,84 @@ import re
 
 from ..models import MovieInfo, SubtitleCandidate
 
+ENGLISH_TITLE_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "into",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
 
 def normalize_text(value: str = "") -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\u3400-\u9fff]+", " ", value.lower())).strip()
+    normalized = re.sub(r"['’]s\b", "s", value.lower())
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\u3400-\u9fff]+", " ", normalized)).strip()
+
+
+def _tokens(value: str = "") -> list[str]:
+    normalized = normalize_text(value)
+    return normalized.split() if normalized else []
+
+
+def _contains_token_sequence(target_tokens: list[str], phrase: str = "") -> bool:
+    phrase_tokens = _tokens(phrase)
+    if not phrase_tokens:
+        return False
+    size = len(phrase_tokens)
+    return any(
+        target_tokens[index : index + size] == phrase_tokens
+        for index in range(len(target_tokens) - size + 1)
+    )
+
+
+def _significant_title_tokens(value: str = "") -> set[str]:
+    result: set[str] = set()
+    for token in _tokens(value):
+        if token.isdigit() or token in ENGLISH_TITLE_STOP_WORDS:
+            continue
+        if len(token) >= 3 or re.search(r"[\u3400-\u9fff]", token):
+            result.add(token)
+    return result
+
+
+def _candidate_identity_text(candidate: SubtitleCandidate) -> str:
+    attrs = candidate.raw.get("attributes") if isinstance(candidate.raw, dict) else {}
+    attrs = attrs if isinstance(attrs, dict) else {}
+    feature_details = attrs.get("feature_details") if isinstance(attrs.get("feature_details"), dict) else {}
+    parts = [
+        candidate.subtitle_title,
+        candidate.description,
+        *candidate.file_names,
+        feature_details.get("title"),
+        feature_details.get("original_title"),
+        feature_details.get("year"),
+        feature_details.get("tmdb_id"),
+        feature_details.get("imdb_id"),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+
+def _candidate_tmdb_id(candidate: SubtitleCandidate) -> int | None:
+    raw = candidate.raw if isinstance(candidate.raw, dict) else {}
+    attrs = raw.get("attributes") if isinstance(raw.get("attributes"), dict) else {}
+    feature_details = attrs.get("feature_details") if isinstance(attrs.get("feature_details"), dict) else {}
+    for value in [feature_details.get("tmdb_id"), attrs.get("tmdb_id"), raw.get("tmdb_id")]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def get_resolution_score(text: str = "") -> float:
@@ -30,30 +105,45 @@ def get_format_score(subtitle_format: str = "") -> float:
 
 
 def get_title_match_score(candidate: SubtitleCandidate, movie: MovieInfo) -> float:
-    target = normalize_text(
-        " ".join([candidate.subtitle_title, candidate.description, *candidate.file_names])
-    )
-    title = normalize_text(movie.title)
-    original_title = normalize_text(movie.original_title)
-    title_zh = normalize_text(movie.title_zh)
-    year = str(movie.year or "")
+    target_tokens = _tokens(_candidate_identity_text(candidate))
     score = 0.0
 
-    if title_zh and title_zh in target:
+    if movie.title_zh and _contains_token_sequence(target_tokens, movie.title_zh):
         score += 80
-    if title and title in target:
+    if movie.title and _contains_token_sequence(target_tokens, movie.title):
         score += 60
-    if original_title and original_title in target:
+    if (
+        movie.original_title
+        and normalize_text(movie.original_title) != normalize_text(movie.title)
+        and _contains_token_sequence(target_tokens, movie.original_title)
+    ):
         score += 55
-    if year and year in target:
-        score += 40
 
-    words = set(title.split()) | set(original_title.split())
-    for word in words:
-        if len(word) >= 3 and word in target:
-            score += 5
+    target_token_set = set(target_tokens)
+    words = _significant_title_tokens(movie.title) | _significant_title_tokens(movie.original_title)
+    for word in words & target_token_set:
+        score += 5
 
     return score
+
+
+def has_movie_identity_match(candidate: SubtitleCandidate, movie: MovieInfo) -> bool:
+    if movie.tmdb_id and _candidate_tmdb_id(candidate) == movie.tmdb_id:
+        return True
+
+    target_tokens = _tokens(_candidate_identity_text(candidate))
+    if any(
+        title and _contains_token_sequence(target_tokens, title)
+        for title in [movie.title_zh, movie.title, movie.original_title]
+    ):
+        return True
+
+    significant_words = _significant_title_tokens(movie.title) | _significant_title_tokens(movie.original_title)
+    if not significant_words:
+        return False
+    matched_words = significant_words & set(target_tokens)
+    required_matches = 1 if len(significant_words) == 1 else 2
+    return len(matched_words) >= required_matches
 
 
 def score_candidate(candidate: SubtitleCandidate, movie: MovieInfo) -> SubtitleCandidate:
@@ -100,4 +190,3 @@ def sort_candidates(candidates: list[SubtitleCandidate]) -> list[SubtitleCandida
         ),
         reverse=True,
     )
-

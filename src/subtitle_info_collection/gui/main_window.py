@@ -945,11 +945,13 @@ class MainWindow(FluentWindow):
         self.automation_reset_button.setIcon(FIF.SYNC)
         self.automation_reset_button.clicked.connect(self.reset_automation_panel)
         self.automation_status = BodyLabel("等待执行")
-        self.automation_status.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 13px;")
+        self.automation_status.setStyleSheet(f"font-size: 15px; color: {TEXT};")
+        self.automation_status.setWordWrap(True)
+        self.automation_status.setMinimumWidth(260)
         action_row.addWidget(self.automation_run_button)
         action_row.addWidget(self.automation_open_button)
         action_row.addWidget(self.automation_reset_button)
-        action_row.addWidget(self.automation_status, 1)
+        action_row.addStretch(1)
         action_card.viewLayout.addLayout(action_row)
         export_options = QHBoxLayout()
         export_options.setSpacing(10)
@@ -970,34 +972,68 @@ class MainWindow(FluentWindow):
         export_options.addWidget(self.automation_unicloud_import_switch)
         action_card.viewLayout.addLayout(export_options)
 
-        stats_card = self._card("统计")
+        stats_card = self._card("任务状态")
+        stats_inner = QVBoxLayout()
+        stats_inner.setSpacing(8)
+
+        status_and_stats = QHBoxLayout()
+        status_and_stats.setSpacing(8)
+
+        self.automation_progress_ring = ProgressRing(self)
+        self.automation_progress_ring.setFixedSize(48, 48)
+        self.automation_progress_ring.setRange(0, 100)
+        self.automation_progress_ring.setValue(0)
+        self.automation_progress_ring.setStrokeWidth(5)
+        automation_status_info = QVBoxLayout()
+        automation_status_info.setSpacing(3)
+        self.automation_progress_label = CaptionLabel("0%")
+        self.automation_progress_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
+        automation_status_info.addWidget(self.automation_status)
+        automation_status_info.addWidget(self.automation_progress_label)
+        automation_status_info.addStretch(1)
+        status_panel = QWidget(self)
+        status_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        status_panel_layout = QHBoxLayout(status_panel)
+        status_panel_layout.setContentsMargins(0, 0, 0, 0)
+        status_panel_layout.setSpacing(10)
+        status_panel_layout.addWidget(self.automation_progress_ring)
+        status_panel_layout.addLayout(automation_status_info, 1)
+        status_and_stats.addWidget(status_panel, 3)
+
         stats_row = QHBoxLayout()
-        stats_row.setSpacing(8)
+        stats_row.setSpacing(6)
         self.automation_stat_labels: dict[str, QLabel] = {}
-        for key, caption, color in [
-            ("total", "采集条数", GREEN),
-            ("pages", "请求页数", PRIMARY),
-            ("output", "输出文件", ORANGE),
+        for key, caption, color, bg_color, width in [
+            ("total", "采集条数", GREEN, GREEN_SOFT, 88),
+            ("pages", "请求页数", PRIMARY, PRIMARY_SOFT, 88),
+            ("output", "输出文件", ORANGE, ORANGE_SOFT, 220),
         ]:
             stat = QFrame(self)
             stat.setStyleSheet(
-                f"background: {PRIMARY_SOFT}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+                f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
             )
-            stat.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            stat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            stat.setFixedWidth(width)
+            stat.setFixedHeight(48)
             stat_layout = QVBoxLayout(stat)
-            stat_layout.setContentsMargins(10, 7, 10, 7)
+            stat_layout.setContentsMargins(8, 5, 8, 5)
+            stat_layout.setSpacing(1)
+            stat_layout.setAlignment(Qt.AlignCenter)
             value = QLabel("0" if key != "output" else "-")
             value.setAlignment(Qt.AlignCenter)
             value.setWordWrap(True)
-            value.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {color};")
+            value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
             label = CaptionLabel(caption)
             label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
+            label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
             stat_layout.addWidget(value)
             stat_layout.addWidget(label)
             self.automation_stat_labels[key] = value
-            stats_row.addWidget(stat, 1)
-        stats_card.viewLayout.addLayout(stats_row)
+            stats_row.addWidget(stat)
+        status_and_stats.addLayout(stats_row, 0)
+
+        stats_inner.addLayout(status_and_stats)
+        stats_card.viewLayout.addLayout(stats_inner)
 
         log_card = self._card("日志")
         self.copy_automation_log_button = TransparentToolButton(FIF.COPY, self)
@@ -1423,6 +1459,8 @@ class MainWindow(FluentWindow):
 
         self.automation_log.clear()
         self.automation_status.setText("执行中")
+        self.automation_progress_ring.setValue(35)
+        self.automation_progress_label.setText("执行中")
         self.automation_run_button.setEnabled(False)
         self.automation_open_button.setEnabled(False)
         self.latest_automation_output_path = None
@@ -1430,6 +1468,7 @@ class MainWindow(FluentWindow):
         self.automation_stat_labels["total"].setText("0")
         self.automation_stat_labels["pages"].setText("0")
         self.automation_stat_labels["output"].setText("-")
+        self.automation_stat_labels["output"].setToolTip("")
 
         self.automation_worker = AutomationScriptWorker(
             data_dir,
@@ -1470,6 +1509,8 @@ class MainWindow(FluentWindow):
     def automation_finished(self, result: dict) -> None:
         self.automation_run_button.setEnabled(True)
         self.automation_status.setText("执行完成")
+        self.automation_progress_ring.setValue(100)
+        self.automation_progress_label.setText("100%")
         output_paths = [
             Path(str(path))
             for path in (result.get("outputPaths") or [])
@@ -1487,6 +1528,9 @@ class MainWindow(FluentWindow):
             else (output_path.name or "-")
         )
         self.automation_stat_labels["output"].setText(output_label)
+        self.automation_stat_labels["output"].setToolTip(
+            "\n".join(str(path) for path in self.latest_automation_output_paths)
+        )
         if result.get("skippedCount"):
             self.append_automation_log(f"本地去重：{result.get('skippedCount')} 条")
         if result.get("translationRequestedCount"):
@@ -1503,6 +1547,8 @@ class MainWindow(FluentWindow):
     def automation_failed(self, message: str) -> None:
         self.automation_run_button.setEnabled(True)
         self.automation_status.setText("执行失败")
+        self.automation_progress_ring.setValue(0)
+        self.automation_progress_label.setText("失败")
         self.append_automation_log(message)
         InfoBar.error("自动化脚本失败", message, parent=self, position=InfoBarPosition.TOP, duration=5000)
 
@@ -1518,12 +1564,15 @@ class MainWindow(FluentWindow):
             return
         self.latest_automation_output_path = None
         self.automation_status.setText("等待执行")
+        self.automation_progress_ring.setValue(0)
+        self.automation_progress_label.setText("0%")
         self.latest_automation_output_paths = []
         self.automation_open_button.setEnabled(False)
         self.automation_log.clear()
         self.automation_stat_labels["total"].setText("0")
         self.automation_stat_labels["pages"].setText("0")
         self.automation_stat_labels["output"].setText("-")
+        self.automation_stat_labels["output"].setToolTip("")
 
     # ── Parser Flow ───────────────────────────────────────────────────
 

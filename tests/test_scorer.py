@@ -1,4 +1,8 @@
-from subtitle_info_collection.engines.scorer import score_candidate, sort_candidates
+from subtitle_info_collection.engines.scorer import (
+    has_movie_identity_match,
+    score_candidate,
+    sort_candidates,
+)
 from subtitle_info_collection.models import MovieInfo, SubtitleCandidate
 
 
@@ -36,3 +40,35 @@ def test_score_prefers_title_match_and_downloads():
     assert sorted_items[0].provider_subtitle_id == "2"
     assert sorted_items[0].total_score > sorted_items[1].total_score
 
+
+def test_identity_match_rejects_same_year_wrong_opensubtitles_title():
+    movie = MovieInfo(
+        movie_id="tmdb-1",
+        title="The Deep End of the Ocean",
+        original_title="The Deep End of the Ocean",
+        title_zh="海洋深处",
+        year=1999,
+        rating=7.0,
+    )
+    wrong = score_candidate(
+        candidate(
+            "wrong",
+            "The.Virgin.Suicides.1999.720p.Bluray.x264.DTS-HDChina[chs&eng]",
+            10_000,
+        ),
+        movie,
+    )
+    assert wrong.scores["titleMatchScore"] == 0
+    assert not has_movie_identity_match(wrong, movie)
+
+
+def test_identity_match_accepts_distinctive_title_without_article():
+    movie = MovieInfo(
+        movie_id="tmdb-1",
+        title="The Matrix",
+        original_title="The Matrix",
+        title_zh="黑客帝国",
+        year=1999,
+    )
+    item = score_candidate(candidate("matrix", "Matrix.1999.REMASTERED.1080p.BluRay.chs_eng.ass", 50), movie)
+    assert has_movie_identity_match(item, movie)

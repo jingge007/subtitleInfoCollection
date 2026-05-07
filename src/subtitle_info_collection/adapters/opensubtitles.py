@@ -68,7 +68,7 @@ class OpenSubtitlesProvider:
             headers=self._headers(),
             json={"username": self.username, "password": self.password},
         )
-        response.raise_for_status()
+        self._raise_for_status(response, "login")
         payload = response.json()
         self._token = payload.get("token") or ""
         returned_base_url = payload.get("base_url") or ""
@@ -79,26 +79,81 @@ class OpenSubtitlesProvider:
                 self.base_url = f"https://{returned_base_url.strip('/')}/api/v1"
 
     def _movie_keyword(self, movie: MovieInfo) -> str:
-        return movie.title_zh or movie.title or movie.original_title
+        return movie.original_title or movie.title or movie.title_zh
 
-    async def search(self, movie: MovieInfo) -> list[SubtitleCandidate]:
-        if not self.api_key:
-            return []
-        params = {
-            "query": self._movie_keyword(movie),
-            "year": movie.year,
+    def _search_params(self, movie: MovieInfo) -> dict[str, object]:
+        params: dict[str, object] = {
             "languages": "ze,zh-cn,en",
             "type": "movie",
             "order_by": "download_count",
             "order_direction": "desc",
         }
+        if movie.tmdb_id:
+            params["tmdb_id"] = movie.tmdb_id
+            return params
+        params["query"] = self._movie_keyword(movie)
+        if movie.year:
+            params["year"] = movie.year
+        return params
+
+    def _response_error_message(self, response: httpx.Response) -> str:
+        try:
+            payload = response.json()
+        except ValueError:
+            return response.text.strip()
+        if isinstance(payload, dict):
+            for key in ["message", "error"]:
+                value = payload.get(key)
+                if value:
+                    return str(value)
+            errors = payload.get("errors")
+            if isinstance(errors, list):
+                return "; ".join(str(item) for item in errors if item)
+        return str(payload)
+
+    def _raise_for_status(self, response: httpx.Response, operation: str) -> None:
+        if response.status_code < 400:
+            return
+        detail = self._response_error_message(response)
+        suffix = f"：{detail}" if detail else ""
+        if response.status_code == 406 and operation == "download":
+            raise CollectorError(
+                f"OpenSubtitles 拒绝下载请求（406），通常表示每日下载额度已用完或账号权限不足{suffix}",
+                ErrorType.DOWNLOAD_QUOTA_EXCEEDED,
+                self.id,
+            )
+        if response.status_code == 429:
+            raise CollectorError(
+                f"OpenSubtitles 请求频率受限（429）{suffix}",
+                ErrorType.RATE_LIMITED,
+                self.id,
+            )
+        if response.status_code in {401, 403}:
+            raise CollectorError(
+                f"OpenSubtitles 认证或权限失败（{response.status_code}）{suffix}",
+                ErrorType.DOWNLOAD_BLOCKED,
+                self.id,
+            )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise CollectorError(
+                f"OpenSubtitles {operation} 请求失败（HTTP {response.status_code}）{suffix}",
+                ErrorType.DOWNLOAD_FAILED,
+                self.id,
+            ) from exc
+
+    async def search(self, movie: MovieInfo) -> list[SubtitleCandidate]:
+        if not self.api_key:
+            return []
+        params = self._search_params(movie)
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             response = await client.get(
                 f"{self.base_url}/subtitles",
                 params=params,
                 headers=self._headers(),
             )
-            response.raise_for_status()
+            self._raise_for_status(response, "search")
             payload = response.json()
         return [self._map_item(item, movie) for item in payload.get("data", [])]
 
@@ -150,7 +205,7 @@ class OpenSubtitlesProvider:
                 headers=self._headers(auth=True),
                 json={"file_id": file_id},
             )
-            response.raise_for_status()
+            self._raise_for_status(response, "download")
             payload = response.json()
             link = payload.get("link") or payload.get("url")
             if not link:
