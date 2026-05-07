@@ -49,6 +49,13 @@ OPENSUBTITLES_PASSWORD=你的 OpenSubtitles 密码
 OPENSUBTITLES_BASE_URL=https://api.opensubtitles.com/api/v1
 OPENSUBTITLES_USER_AGENT=subtitleInfoCollection v0.1
 
+CLASSIC_LINES_USERNAME=33 台词账号
+CLASSIC_LINES_PASSWORD=33 台词密码
+CLASSIC_LINES_TOKEN=
+CLASSIC_LINES_TOKEN_TIME=
+BAIDU_TRANSLATE_APP_ID=
+BAIDU_TRANSLATE_SECRET=
+
 SUBTITLE_PROVIDER_PRIORITY=subhd,assrt,opensubtitles
 SUBTITLE_PROVIDER_DISABLED=
 SUBTITLE_REQUEST_INTERVAL_MS=13000
@@ -64,6 +71,9 @@ HTTPS_PROXY=
 - `TMDB_TOKEN` 是采集电影列表所需的主要配置。
 - `ASSRT_TOKEN` 填写后可使用 ASSRT 字幕源。
 - `OPENSUBTITLES_API_KEY` 用于搜索，用户名和密码用于下载。
+- `CLASSIC_LINES_USERNAME` / `CLASSIC_LINES_PASSWORD` 用于自动化脚本自动登录 33 台词。
+- `CLASSIC_LINES_TOKEN` / `CLASSIC_LINES_TOKEN_TIME` 由自动化脚本成功登录后自动写入 `.env`。
+- `BAIDU_TRANSLATE_APP_ID` / `BAIDU_TRANSLATE_SECRET` 用于 Google 翻译失败后的百度翻译兜底。
 - `SUBTITLE_COLLECTION_DATA_DIR` 留空时默认使用当前用户目录下的 `subtitleInfoCollection` 文件夹。
 - 界面设置页只允许修改数据目录，密钥、请求间隔、代理和字幕源策略都从 `.env` 读取。
 
@@ -106,7 +116,7 @@ python -m subtitle_info_collection
 
 ### 历史记录
 
-打开“历史记录”页可查看最近的采集任务，包括状态、年份、Top 数量、开始时间、结束时间和输出目录。
+打开“历史记录”页可查看最近的采集任务，包括年份、Top 数量、开始时间、结束时间和输出目录，时间按 `YYYY-MM-DD HH:mm:ss` 展示。
 
 ### 设置和维护
 
@@ -127,9 +137,8 @@ python -m subtitle_info_collection
   subtitle_info_collection.sqlite3
   output/
     YYYYMMDDHHMMSS-YYYY-topN/
-      subtitles/
-        *.srt
-        *.ass
+      *.srt
+      *.ass
   parsed/
     YYYYMMDD-HHMMSS-movies.json
     YYYYMMDD-HHMMSS-subtitles.json

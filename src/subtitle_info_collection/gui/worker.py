@@ -157,25 +157,44 @@ class AutomationScriptWorker(QThread):
     finished_success = Signal(dict)
     finished_error = Signal(str)
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        env_path: Path | None = None,
+        unicloud_import_format: bool = True,
+    ) -> None:
         super().__init__()
         self.data_dir = data_dir
+        self.env_path = env_path
+        self.unicloud_import_format = unicloud_import_format
 
     def run(self) -> None:
         async def _run() -> None:
             runner = ClassicLinesAutomationRunner(
-                ClassicLinesAutomationOptions(data_dir=self.data_dir),
+                ClassicLinesAutomationOptions(
+                    data_dir=self.data_dir,
+                    env_path=self.env_path,
+                    unicloud_import_format=self.unicloud_import_format,
+                ),
                 log=self.log_message.emit,
             )
             result = await runner.run()
             self.finished_success.emit(
                 {
                     "outputPath": str(result.output_path),
-                    "tokenCachePath": str(result.token_cache_path),
+                    "outputPaths": [str(path) for path in result.output_paths],
                     "totalCount": result.total_count,
+                    "inputCount": result.input_count,
+                    "skippedCount": result.skipped_count,
                     "pageCount": result.page_count,
                     "startedAt": result.started_at,
                     "finishedAt": result.finished_at,
+                    "exportFormat": result.export_format,
+                    "splitLimitBytes": result.split_limit_bytes,
+                    "oversizedRecords": result.oversized_records,
+                    "translationRequestedCount": result.translation_requested_count,
+                    "translationFilledCount": result.translation_filled_count,
+                    "translationFailureCount": result.translation_failure_count,
                 }
             )
 

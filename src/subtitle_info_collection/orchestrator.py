@@ -46,7 +46,7 @@ def get_run_paths(output_root: Path, year: int, limit: int, started_at: datetime
     output_dir = output_root / f"{stamp}-{year}-{top_tag}"
     return RunPaths(
         output_dir=output_dir,
-        download_dir=output_dir / "subtitles",
+        download_dir=output_dir,
     )
 
 

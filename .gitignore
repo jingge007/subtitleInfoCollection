@@ -42,3 +42,4 @@ test-results/
 *.swo
 .DS_Store
 Thumbs.db
+.junie/

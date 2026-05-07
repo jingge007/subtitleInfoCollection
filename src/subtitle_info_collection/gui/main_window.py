@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
+    QTextEdit as QtTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -31,7 +32,6 @@ from qfluentwidgets import (
     CaptionLabel,
     CardWidget,
     CheckBox,
-    ComboBox,
     FluentIcon as FIF,
     FluentWindow,
     HeaderCardWidget,
@@ -47,7 +47,6 @@ from qfluentwidgets import (
     StrongBodyLabel,
     SubtitleLabel,
     SwitchButton,
-    TextEdit,
     TransparentToolButton,
     setTheme,
     setThemeColor,
@@ -100,6 +99,7 @@ class MainWindow(FluentWindow):
         self.parser_worker: ParserWorker | None = None
         self.automation_worker: AutomationScriptWorker | None = None
         self.latest_automation_output_path: Path | None = None
+        self.latest_automation_output_paths: list[Path] = []
 
         self.setWindowTitle("字幕采集工具")
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
@@ -290,6 +290,13 @@ class MainWindow(FluentWindow):
         table.verticalHeader().setDefaultSectionSize(32)
         table.horizontalHeader().setHighlightSections(False)
 
+    def _configure_log_area(self, text_edit: QtTextEdit) -> None:
+        text_edit.setReadOnly(True)
+        text_edit.setObjectName("logArea")
+        text_edit.setStyleSheet(LOG_STYLE)
+        text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
     # ── Dashboard Page ────────────────────────────────────────────────
 
     def _build_task_center_page(self) -> QWidget:
@@ -343,11 +350,6 @@ class MainWindow(FluentWindow):
         self.source_status_layout.setSpacing(10)
         source_card.viewLayout.addLayout(self.source_status_layout)
 
-        records_card = self._card("最近字幕资料")
-        self.latest_records_layout = QHBoxLayout()
-        self.latest_records_layout.setSpacing(8)
-        records_card.viewLayout.addLayout(self.latest_records_layout)
-
         output_card = self._card("输出与维护")
         output_inner = QVBoxLayout()
         output_inner.setSpacing(10)
@@ -377,8 +379,7 @@ class MainWindow(FluentWindow):
 
         layout.addLayout(header)
         layout.addLayout(metrics_row)
-        layout.addWidget(source_card)
-        layout.addWidget(records_card, 1)
+        layout.addWidget(source_card, 1)
         layout.addWidget(output_card)
         return page
 
@@ -403,7 +404,6 @@ class MainWindow(FluentWindow):
                 self.dashboard_ready_label, "配置待完善", False
             )
 
-        self._refresh_latest_records()
         self._refresh_source_status()
 
         package_path = self.task_summary.get("package_path") or ""
@@ -474,6 +474,8 @@ class MainWindow(FluentWindow):
             self.config_cards_layout.addWidget(card, index // 3, index % 3)
 
     def _refresh_latest_records(self) -> None:
+        if not hasattr(self, "latest_records_layout"):
+            return
         self._clear_layout(self.latest_records_layout)
         records = self.task_summary.get("latest_records") or []
         if not records:
@@ -758,13 +760,24 @@ class MainWindow(FluentWindow):
         progress_info.setSpacing(3)
         self.collect_status = StrongBodyLabel("等待开始")
         self.collect_status.setStyleSheet(f"font-size: 15px; color: {TEXT};")
+        self.collect_status.setWordWrap(True)
+        self.collect_status.setMinimumWidth(260)
         self.collect_progress_label = CaptionLabel("0%")
         self.collect_progress_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
         progress_info.addWidget(self.collect_status)
         progress_info.addWidget(self.collect_progress_label)
         progress_info.addStretch(1)
-        progress_and_stats.addWidget(self.collect_progress_ring)
-        progress_and_stats.addLayout(progress_info)
+        progress_panel = QWidget(self)
+        progress_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        progress_panel_layout = QHBoxLayout(progress_panel)
+        progress_panel_layout.setContentsMargins(0, 0, 0, 0)
+        progress_panel_layout.setSpacing(10)
+        progress_panel_layout.addWidget(self.collect_progress_ring)
+        progress_panel_layout.addLayout(progress_info, 1)
+        progress_and_stats.addWidget(progress_panel, 3)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(6)
 
         self.collect_stat_labels: dict[str, QLabel] = {}
         stat_items = [
@@ -779,7 +792,8 @@ class MainWindow(FluentWindow):
             stat_card.setStyleSheet(
                 f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
             )
-            stat_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            stat_card.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            stat_card.setFixedWidth(72)
             stat_card.setFixedHeight(48)
             stat_layout = QVBoxLayout(stat_card)
             stat_layout.setContentsMargins(8, 5, 8, 5)
@@ -794,7 +808,9 @@ class MainWindow(FluentWindow):
             stat_layout.addWidget(value_label)
             stat_layout.addWidget(caption_label)
             self.collect_stat_labels[key] = value_label
-            progress_and_stats.addWidget(stat_card, 1)
+            stats_row.addWidget(stat_card)
+
+        progress_and_stats.addLayout(stats_row, 0)
 
         status_inner.addLayout(progress_and_stats)
         status_card.viewLayout.addLayout(status_inner)
@@ -806,10 +822,8 @@ class MainWindow(FluentWindow):
         log_card.headerLayout.addStretch(1)
         log_card.headerLayout.addWidget(self.copy_collect_log_button)
 
-        self.collect_log = TextEdit(self)
-        self.collect_log.setReadOnly(True)
-        self.collect_log.setObjectName("logArea")
-        self.collect_log.setStyleSheet(LOG_STYLE)
+        self.collect_log = QtTextEdit(self)
+        self._configure_log_area(self.collect_log)
         log_card.viewLayout.addWidget(self.collect_log)
 
         monitor_col.addWidget(status_card)
@@ -872,22 +886,24 @@ class MainWindow(FluentWindow):
         action_card.viewLayout.addLayout(export_options)
 
         result_card = self._card("解析结果")
-        self.parse_table = QTableWidget(0, 6, self)
+        self.parse_table = QTableWidget(0, 5, self)
         self.parse_table.setObjectName("dataTable")
-        self.parse_table.setHorizontalHeaderLabels(
-            ["文件路径", "电影", "电影 ID", "原始", "导出", "状态/关键词"]
-        )
         self._configure_table(self.parse_table)
+        self.parse_table.setHorizontalHeaderLabels(
+            ["文件路径", "电影", "原始", "导出", "状态/关键词"]
+        )
         self.parse_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for column in range(1, 6):
+        self.parse_table.setColumnWidth(1, 220)
+        self.parse_table.setColumnWidth(2, 70)
+        self.parse_table.setColumnWidth(3, 70)
+        self.parse_table.setColumnWidth(4, 180)
+        for column in range(1, 5):
             self.parse_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
         result_card.viewLayout.addWidget(self.parse_table)
 
         log_card = self._card("解析日志")
-        self.parse_log = TextEdit(self)
-        self.parse_log.setReadOnly(True)
-        self.parse_log.setObjectName("logArea")
-        self.parse_log.setStyleSheet(LOG_STYLE)
+        self.parse_log = QtTextEdit(self)
+        self._configure_log_area(self.parse_log)
         log_card.viewLayout.addWidget(self.parse_log)
 
         layout.addWidget(action_card)
@@ -896,9 +912,6 @@ class MainWindow(FluentWindow):
         return page
 
     # ── History Tab ───────────────────────────────────────────────────
-
-    STATUS_MAP = {"completed": "已完成", "failed": "已失败", "running": "运行中"}
-    STATUS_FILTER_MAP = {"全部状态": "", "已完成": "completed", "已失败": "failed", "运行中": "running"}
 
     def _build_automation_tab(self) -> QWidget:
         page = QWidget()
@@ -938,6 +951,24 @@ class MainWindow(FluentWindow):
         action_row.addWidget(self.automation_reset_button)
         action_row.addWidget(self.automation_status, 1)
         action_card.viewLayout.addLayout(action_row)
+        export_options = QHBoxLayout()
+        export_options.setSpacing(10)
+        export_text = QVBoxLayout()
+        export_text.setSpacing(2)
+        export_title = StrongBodyLabel("uniCloud 控制台导入格式")
+        export_desc = CaptionLabel("开启后按 classic-line 导入规则解析、翻译补全英文，并按 45MB 拆分 jsonl 文件")
+        export_desc.setStyleSheet(f"color: {TEXT_PLACEHOLDER};")
+        export_desc.setWordWrap(True)
+        export_text.addWidget(export_title)
+        export_text.addWidget(export_desc)
+        self.automation_unicloud_import_switch = SwitchButton(self)
+        self.automation_unicloud_import_switch.setObjectName("automationUnicloudImportFormatSwitch")
+        self.automation_unicloud_import_switch.setOnText("开启")
+        self.automation_unicloud_import_switch.setOffText("关闭")
+        self.automation_unicloud_import_switch.setChecked(True)
+        export_options.addLayout(export_text, 1)
+        export_options.addWidget(self.automation_unicloud_import_switch)
+        action_card.viewLayout.addLayout(export_options)
 
         stats_card = self._card("统计")
         stats_row = QHBoxLayout()
@@ -976,10 +1007,8 @@ class MainWindow(FluentWindow):
         log_card.headerLayout.addStretch(1)
         log_card.headerLayout.addWidget(self.copy_automation_log_button)
 
-        self.automation_log = TextEdit(self)
-        self.automation_log.setReadOnly(True)
-        self.automation_log.setObjectName("logArea")
-        self.automation_log.setStyleSheet(LOG_STYLE)
+        self.automation_log = QtTextEdit(self)
+        self._configure_log_area(self.automation_log)
         log_card.viewLayout.addWidget(self.automation_log)
 
         layout.addWidget(action_card)
@@ -1009,33 +1038,24 @@ class MainWindow(FluentWindow):
         self.history_search = SearchLineEdit(self)
         self.history_search.setPlaceholderText("搜索任务...")
         self.history_search.setFixedWidth(240)
-        self.history_status_filter = ComboBox(self)
-        self.history_status_filter.addItems(list(self.STATUS_FILTER_MAP.keys()))
-        self.history_status_filter.setFixedWidth(140)
-        self.history_status_filter.currentTextChanged.connect(self._filter_history_table)
+        self.history_search.textChanged.connect(self._filter_history_table)
         refresh_button = PushButton("刷新历史", self)
         refresh_button.setIcon(FIF.SYNC)
         refresh_button.clicked.connect(self.refresh_history)
-        self.delete_selected_button = PushButton("删除选中", self)
-        self.delete_selected_button.setIcon(FIF.DELETE)
-        self.delete_selected_button.clicked.connect(self._delete_selected_history)
         toolbar.addWidget(self.history_search)
-        toolbar.addWidget(self.history_status_filter)
         toolbar.addStretch(1)
-        toolbar.addWidget(self.delete_selected_button)
         toolbar.addWidget(refresh_button)
 
         table_card = self._card("任务列表")
-        self.history_table = QTableWidget(0, 8, self)
+        self.history_table = QTableWidget(0, 5, self)
         self.history_table.setObjectName("dataTable")
         self.history_table.setHorizontalHeaderLabels(
-            ["", "ID", "状态", "年份", "Top", "开始时间", "结束时间", "输出目录"]
+            ["年份", "Top", "开始时间", "结束时间", "输出目录"]
         )
         self._configure_table(self.history_table)
-        self.history_table.setColumnWidth(0, 48)
-        for column in range(1, 7):
+        for column in range(0, 4):
             self.history_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
-        self.history_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
+        self.history_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         table_card.viewLayout.addWidget(self.history_table)
 
         layout.addLayout(header)
@@ -1043,18 +1063,18 @@ class MainWindow(FluentWindow):
         layout.addWidget(table_card, 1)
         return page
 
-    def _filter_history_table(self, filter_text: str) -> None:
-        status_key = self.STATUS_FILTER_MAP.get(filter_text, "")
+    def _filter_history_table(self, filter_text: str = "") -> None:
+        query = (filter_text or self.history_search.text()).strip().lower()
         for row in range(self.history_table.rowCount()):
-            if not status_key:
+            if not query:
                 self.history_table.setRowHidden(row, False)
                 continue
-            status_item = self.history_table.item(row, 2)
-            if status_item:
-                raw_status = status_item.data(Qt.UserRole) or ""
-                self.history_table.setRowHidden(row, raw_status != status_key)
-            else:
-                self.history_table.setRowHidden(row, True)
+            row_text = " ".join(
+                self.history_table.item(row, column).text().lower()
+                for column in range(self.history_table.columnCount())
+                if self.history_table.item(row, column)
+            )
+            self.history_table.setRowHidden(row, query not in row_text)
 
     def _delete_selected_history(self) -> None:
         if self.collector_worker and self.collector_worker.isRunning():
@@ -1406,11 +1426,16 @@ class MainWindow(FluentWindow):
         self.automation_run_button.setEnabled(False)
         self.automation_open_button.setEnabled(False)
         self.latest_automation_output_path = None
+        self.latest_automation_output_paths = []
         self.automation_stat_labels["total"].setText("0")
         self.automation_stat_labels["pages"].setText("0")
         self.automation_stat_labels["output"].setText("-")
 
-        self.automation_worker = AutomationScriptWorker(data_dir)
+        self.automation_worker = AutomationScriptWorker(
+            data_dir,
+            self.env_bootstrap.env_path,
+            self.automation_unicloud_import_switch.isChecked(),
+        )
         self.automation_worker.log_message.connect(self.append_automation_log)
         self.automation_worker.finished_success.connect(self.automation_finished)
         self.automation_worker.finished_error.connect(self.automation_failed)
@@ -1445,14 +1470,35 @@ class MainWindow(FluentWindow):
     def automation_finished(self, result: dict) -> None:
         self.automation_run_button.setEnabled(True)
         self.automation_status.setText("执行完成")
-        output_path = Path(str(result.get("outputPath") or ""))
+        output_paths = [
+            Path(str(path))
+            for path in (result.get("outputPaths") or [])
+            if str(path or "").strip()
+        ]
+        output_path = output_paths[0] if output_paths else Path(str(result.get("outputPath") or ""))
         self.latest_automation_output_path = output_path
-        self.automation_open_button.setEnabled(output_path.exists())
+        self.latest_automation_output_paths = output_paths or ([output_path] if str(output_path) else [])
+        self.automation_open_button.setEnabled(any(path.exists() for path in self.latest_automation_output_paths))
         self.automation_stat_labels["total"].setText(str(result.get("totalCount", 0)))
         self.automation_stat_labels["pages"].setText(str(result.get("pageCount", 0)))
-        self.automation_stat_labels["output"].setText(output_path.name or "-")
-        self.append_automation_log(f"输出文件：{output_path}")
-        InfoBar.success("自动化脚本完成", f"输出文件：{output_path}", parent=self, position=InfoBarPosition.TOP, duration=5000)
+        output_label = (
+            f"{len(self.latest_automation_output_paths)} 个文件"
+            if len(self.latest_automation_output_paths) > 1
+            else (output_path.name or "-")
+        )
+        self.automation_stat_labels["output"].setText(output_label)
+        if result.get("skippedCount"):
+            self.append_automation_log(f"本地去重：{result.get('skippedCount')} 条")
+        if result.get("translationRequestedCount"):
+            self.append_automation_log(
+                "英文补全："
+                f"请求 {result.get('translationRequestedCount')} 条，"
+                f"成功 {result.get('translationFilledCount')} 条，"
+                f"失败 {result.get('translationFailureCount')} 条"
+            )
+        for path in self.latest_automation_output_paths:
+            self.append_automation_log(f"输出文件：{path}")
+        InfoBar.success("自动化脚本完成", f"输出 {output_label}", parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     def automation_failed(self, message: str) -> None:
         self.automation_run_button.setEnabled(True)
@@ -1461,7 +1507,9 @@ class MainWindow(FluentWindow):
         InfoBar.error("自动化脚本失败", message, parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     def open_automation_output_file(self) -> None:
-        if self.latest_automation_output_path:
+        if len(self.latest_automation_output_paths) > 1 and self.latest_automation_output_paths[0].parent:
+            self.open_path(self.latest_automation_output_paths[0].parent)
+        elif self.latest_automation_output_path:
             self.open_path(self.latest_automation_output_path)
 
     def reset_automation_panel(self) -> None:
@@ -1470,6 +1518,7 @@ class MainWindow(FluentWindow):
             return
         self.latest_automation_output_path = None
         self.automation_status.setText("等待执行")
+        self.latest_automation_output_paths = []
         self.automation_open_button.setEnabled(False)
         self.automation_log.clear()
         self.automation_stat_labels["total"].setText("0")
@@ -1559,12 +1608,11 @@ class MainWindow(FluentWindow):
         index = self.parse_table.rowCount()
         self.parse_table.insertRow(index)
         if "error" in row:
-            values = [row.get("file", ""), "-", "-", "-", "-", row["error"]]
+            values = [row.get("file", ""), "-", "-", "-", row["error"]]
         else:
             values = [
                 row.get("file", ""),
                 row.get("title", ""),
-                row.get("movieId", ""),
                 row.get("originalCount", 0),
                 row.get("exportCount", 0),
                 row.get("matchedKeyword", ""),
@@ -1572,7 +1620,7 @@ class MainWindow(FluentWindow):
         for column, value in enumerate(values):
             item = QTableWidgetItem(str(value))
             item.setToolTip(str(value))
-            if column in {2, 3, 4}:
+            if column in {2, 3}:
                 item.setTextAlignment(Qt.AlignCenter)
             self.parse_table.setItem(index, column, item)
 
@@ -1611,6 +1659,16 @@ class MainWindow(FluentWindow):
 
     # ── History ───────────────────────────────────────────────────────
 
+    def _format_history_time(self, value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        normalized = text.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return text[:19].replace("T", " ")
+
     def refresh_history(self) -> None:
         try:
             self._ensure_storage_for_current_data_dir()
@@ -1620,43 +1678,20 @@ class MainWindow(FluentWindow):
         self.history_table.setRowCount(len(rows))
         for row_index, item in enumerate(rows):
             output_dir = Path(item.get("result", {}).get("downloadDir", ""))
-            raw_status = item.get("status", "")
-            display_status = self.STATUS_MAP.get(raw_status, raw_status)
-
-            check = CheckBox(self)
-            check.setFixedSize(20, 20)
-            check_container = QWidget(self)
-            check_container.setFixedHeight(36)
-            check_layout = QHBoxLayout(check_container)
-            check_layout.setContentsMargins(0, 0, 0, 0)
-            check_layout.setAlignment(Qt.AlignCenter)
-            check_layout.addWidget(check)
-            self.history_table.setCellWidget(row_index, 0, check_container)
-
             values = [
-                item.get("id", ""),
-                display_status,
                 item.get("year", ""),
                 item.get("limit", ""),
-                item.get("started_at", ""),
-                item.get("finished_at", ""),
+                self._format_history_time(item.get("started_at", "")),
+                self._format_history_time(item.get("finished_at", "")),
                 str(output_dir) if str(output_dir) != "." else "",
             ]
             for column, value in enumerate(values):
                 table_item = QTableWidgetItem(str(value))
                 table_item.setToolTip(str(value))
-                if column in {0, 1, 2, 3}:
+                if column in {0, 1}:
                     table_item.setTextAlignment(Qt.AlignCenter)
-                if column == 0:
-                    table_item.setData(Qt.UserRole, raw_status)
-                    if raw_status == "completed":
-                        table_item.setForeground(Qt.darkGreen)
-                    elif raw_status == "failed":
-                        table_item.setForeground(Qt.red)
-                    elif raw_status == "running":
-                        from PySide6.QtGui import QColor
-                        table_item.setForeground(QColor(PRIMARY))
-                self.history_table.setItem(row_index, column + 1, table_item)
+                self.history_table.setItem(row_index, column, table_item)
+        self._filter_history_table()
 
     # ── Settings Actions ──────────────────────────────────────────────
 

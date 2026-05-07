@@ -1,4 +1,5 @@
 from subtitle_info_collection.models import MovieInfo, SubtitleCandidate
+from subtitle_info_collection.orchestrator import get_run_paths
 from subtitle_info_collection.storage import AppStorage
 
 
@@ -79,3 +80,10 @@ def test_storage_returns_task_center_summary(tmp_path):
     assert summary["latest_records"][0]["movieTitleZh"] == "示例电影"
     assert summary["recent_runs"][0]["status"] == "completed"
     assert summary["source_health"]["subhd"]["healthy"] is True
+
+
+def test_run_paths_write_downloads_directly_in_task_output_dir(tmp_path):
+    paths = get_run_paths(tmp_path, 2026, 10)
+
+    assert paths.download_dir == paths.output_dir
+    assert paths.download_dir.parent == tmp_path

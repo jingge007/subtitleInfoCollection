@@ -2,6 +2,7 @@ import re
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea, QTableWidget, QTextEdit
 from qfluentwidgets import FluentWindow, SwitchButton
 
@@ -65,7 +66,21 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     unicloud_switch = window.findChild(SwitchButton, "unicloudImportFormatSwitch")
     assert unicloud_switch is not None
     assert unicloud_switch.isChecked()
+    automation_unicloud_switch = window.findChild(
+        SwitchButton,
+        "automationUnicloudImportFormatSwitch",
+    )
+    assert automation_unicloud_switch is not None
+    assert automation_unicloud_switch.isChecked()
+    assert window.parse_table.columnCount() == 5
+    assert window.history_table.columnCount() == 5
+    assert not hasattr(window, "latest_records_layout")
+    assert all(
+        log.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOn
+        for log in [window.collect_log, window.parse_log, window.automation_log]
+    )
     button_texts = {button.text() for button in window.findChildren(QPushButton)}
+    assert "删除选中" not in button_texts
     assert "自动化脚本" in button_texts or "执行" in button_texts
     assert "自动上传经典台词" not in button_texts
     assert "上传到经典台词" not in button_texts
@@ -125,6 +140,11 @@ def test_package_dist_dir_env_setting_is_documented_and_used():
     package_spec = spec_files["字幕采集工具.spec"]
 
     assert "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR=" in env_example
+    assert "CLASSIC_LINES_USERNAME=" in env_example
+    assert "CLASSIC_LINES_PASSWORD=" in env_example
+    assert "CLASSIC_LINES_TOKEN=" in env_example
+    assert "BAIDU_TRANSLATE_APP_ID=" in env_example
+    assert "BAIDU_TRANSLATE_SECRET=" in env_example
     assert "推荐填写最终目录" in env_example
     assert "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR" in build_script
     assert "--distpath" in build_script
