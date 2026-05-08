@@ -1341,6 +1341,7 @@ class MainWindow(FluentWindow):
             subtitle_providers=providers,
             fallback_enabled=self.fallback_check.isChecked(),
             download_enabled=self.download_check.isChecked(),
+            subtitle_min_bilingual_ratio=env_settings.subtitle_min_bilingual_ratio,
             request_interval_ms=env_settings.request_interval_ms,
             output_root=data_dir / "output",
             tmdb_token=env_settings.tmdb_token,

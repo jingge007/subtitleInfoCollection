@@ -10,6 +10,7 @@ from ..errors import CollectorError, ErrorType
 from ..models import DownloadedPayload, SubtitleCandidate
 from .scorer import normalize_text
 from .subtitle_engine import (
+    DEFAULT_MIN_BILINGUAL_RATIO,
     MIN_VALID_SUBTITLE_BYTES,
     detect_subtitle_format,
     validate_downloaded_subtitle_bytes,
@@ -57,10 +58,23 @@ def _save_validated_bytes(
     subtitle_format: str,
     file_name: str,
     lenient: bool = False,
+    min_bilingual_ratio: float = DEFAULT_MIN_BILINGUAL_RATIO,
 ) -> Path:
-    validation = validate_downloaded_subtitle_bytes(data, subtitle_format, file_name, lenient=lenient)
+    validation = validate_downloaded_subtitle_bytes(
+        data,
+        subtitle_format,
+        file_name,
+        lenient=lenient,
+        min_bilingual_ratio=min_bilingual_ratio,
+    )
     if not validation.valid and not lenient:
-        validation = validate_downloaded_subtitle_bytes(data, subtitle_format, file_name, lenient=True)
+        validation = validate_downloaded_subtitle_bytes(
+            data,
+            subtitle_format,
+            file_name,
+            lenient=True,
+            min_bilingual_ratio=min_bilingual_ratio,
+        )
         if validation.valid:
             lenient = True
 
@@ -144,6 +158,7 @@ def save_downloaded_payloads(
     base_name: str,
     candidate: SubtitleCandidate,
     lenient: bool = False,
+    min_bilingual_ratio: float = DEFAULT_MIN_BILINGUAL_RATIO,
 ) -> list[Path]:
     saved: list[Path] = []
     last_error: CollectorError | None = None
@@ -168,7 +183,16 @@ def save_downloaded_payloads(
     for file_name, data, subtitle_format in all_extracted:
         save_path = save_dir / f"{safe_filename(base_name)}.{subtitle_format}"
         try:
-            saved.append(_save_validated_bytes(data, save_path, subtitle_format, file_name, lenient=lenient))
+            saved.append(
+                _save_validated_bytes(
+                    data,
+                    save_path,
+                    subtitle_format,
+                    file_name,
+                    lenient=lenient,
+                    min_bilingual_ratio=min_bilingual_ratio,
+                )
+            )
             break
         except CollectorError as exc:
             last_error = exc
@@ -177,7 +201,16 @@ def save_downloaded_payloads(
         for file_name, data, subtitle_format in all_extracted:
             save_path = save_dir / f"{safe_filename(base_name)}.{subtitle_format}"
             try:
-                saved.append(_save_validated_bytes(data, save_path, subtitle_format, file_name, lenient=True))
+                saved.append(
+                    _save_validated_bytes(
+                        data,
+                        save_path,
+                        subtitle_format,
+                        file_name,
+                        lenient=True,
+                        min_bilingual_ratio=min_bilingual_ratio,
+                    )
+                )
                 break
             except CollectorError:
                 continue

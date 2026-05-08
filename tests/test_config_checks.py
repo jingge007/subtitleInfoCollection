@@ -1,4 +1,39 @@
+from pathlib import Path
+
 from subtitle_info_collection.config import AppSettings, bootstrap_env_file, evaluate_config
+
+
+ENV_KEYS = [
+    "TMDB_TOKEN",
+    "ASSRT_TOKEN",
+    "ASSRT_API_BASE_URL",
+    "SUBDL_API_KEY",
+    "SUBDL_BASE_URL",
+    "SUBDL_DOWNLOAD_BASE_URL",
+    "SUBDL_LANGUAGES",
+    "SUBDL_INCLUDE_TRADITIONAL",
+    "OPENSUBTITLES_API_KEY",
+    "OPENSUBTITLES_USERNAME",
+    "OPENSUBTITLES_PASSWORD",
+    "OPENSUBTITLES_BASE_URL",
+    "OPENSUBTITLES_USER_AGENT",
+    "CLASSIC_LINES_USERNAME",
+    "CLASSIC_LINES_PASSWORD",
+    "CLASSIC_LINES_TOKEN",
+    "CLASSIC_LINES_TOKEN_TIME",
+    "BAIDU_TRANSLATE_APP_ID",
+    "BAIDU_TRANSLATE_SECRET",
+    "SUBTITLE_PROVIDER_PRIORITY",
+    "SUBTITLE_PROVIDER_DISABLED",
+    "SUBTITLE_REQUEST_INTERVAL_MS",
+    "SUBTITLE_MIN_BILINGUAL_RATIO",
+    "SUBHD_CAPTCHA_OCR_ENABLED",
+    "SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE",
+    "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR",
+    "SUBTITLE_COLLECTION_DATA_DIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+]
 
 
 def test_bootstrap_env_file_copies_example_without_overwriting(tmp_path):
@@ -53,3 +88,33 @@ def test_evaluate_config_reports_missing_tokens_and_provider_readiness(tmp_path)
     assert result.providers[2].configured is False
     assert result.providers[3].enabled is False
     assert any("TMDb" in warning for warning in result.warnings)
+
+
+def test_env_example_documents_each_config_item_in_chinese():
+    env_example = (Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+    lines = env_example.splitlines()
+
+    for key in ENV_KEYS:
+        key_index = next(index for index, line in enumerate(lines) if line.startswith(f"{key}="))
+        previous = lines[key_index - 1] if key_index > 0 else ""
+        assert previous.startswith("#")
+        assert any("\u4e00" <= char <= "\u9fff" for char in previous)
+
+
+def test_app_settings_reads_and_clamps_subtitle_min_bilingual_ratio(tmp_path):
+    env = tmp_path / ".env"
+
+    env.write_text("SUBTITLE_MIN_BILINGUAL_RATIO=0.55\n", encoding="utf-8")
+    assert AppSettings.from_env(env).subtitle_min_bilingual_ratio == 0.55
+
+    env.write_text("SUBTITLE_MIN_BILINGUAL_RATIO=\n", encoding="utf-8")
+    assert AppSettings.from_env(env).subtitle_min_bilingual_ratio == 0.70
+
+    env.write_text("SUBTITLE_MIN_BILINGUAL_RATIO=not-a-number\n", encoding="utf-8")
+    assert AppSettings.from_env(env).subtitle_min_bilingual_ratio == 0.70
+
+    env.write_text("SUBTITLE_MIN_BILINGUAL_RATIO=1.25\n", encoding="utf-8")
+    assert AppSettings.from_env(env).subtitle_min_bilingual_ratio == 1.0
+
+    env.write_text("SUBTITLE_MIN_BILINGUAL_RATIO=-0.25\n", encoding="utf-8")
+    assert AppSettings.from_env(env).subtitle_min_bilingual_ratio == 0.0

@@ -456,7 +456,13 @@ class SubtitleCollectionOrchestrator:
                     ),
                 )
                 base_name = safe_filename(best.movie_title_zh or best.movie_title or best.provider_subtitle_id)
-                saved_paths = save_downloaded_payloads(payloads, paths.download_dir, base_name, best)
+                saved_paths = save_downloaded_payloads(
+                    payloads,
+                    paths.download_dir,
+                    base_name,
+                    best,
+                    min_bilingual_ratio=config.subtitle_min_bilingual_ratio,
+                )
                 stats[best.provider]["downloadCount"] = int(stats[best.provider]["downloadCount"]) + len(saved_paths)
                 download_results.append(
                     DownloadResult(

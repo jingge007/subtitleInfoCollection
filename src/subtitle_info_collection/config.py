@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover
 
 DEFAULT_PROVIDER_PRIORITY = ["subhd", "subdl", "assrt", "opensubtitles"]
 DEFAULT_REQUEST_INTERVAL_MS = 13_000
+DEFAULT_MIN_BILINGUAL_RATIO = 0.70
 PROVIDER_LABELS = {
     "subhd": "SubHD",
     "subdl": "SubDL",
@@ -59,6 +60,17 @@ def parse_float(value: str | None, fallback: float) -> float:
         return float(str(value).strip())
     except (TypeError, ValueError):
         return fallback
+
+
+def parse_ratio(value: str | None, fallback: float) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    try:
+        ratio = float(text)
+    except (TypeError, ValueError):
+        return fallback
+    return max(0.0, min(1.0, ratio))
 
 
 def default_data_dir() -> Path:
@@ -187,7 +199,7 @@ def evaluate_config(
             label=PROVIDER_LABELS["subdl"],
             enabled="subdl" not in disabled,
             configured=bool(settings.subdl_api_key.strip()),
-            detail="Requires SUBDL_API_KEY; default languages=ZH,EN for broader bilingual recall.",
+            detail="需要 SUBDL_API_KEY；默认语言 ZH,EN 用于扩大中英双语候选召回。",
         ),
         ProviderConfigStatus(
             id="assrt",
@@ -240,6 +252,7 @@ class AppSettings:
     subdl_download_base_url: str = "https://dl.subdl.com"
     subdl_languages: str = "ZH,EN"
     subdl_include_traditional: bool = False
+    subtitle_min_bilingual_ratio: float = DEFAULT_MIN_BILINGUAL_RATIO
     subhd_captcha_ocr_enabled: bool = True
     subhd_captcha_auto_submit_min_confidence: float = 0.85
     data_dir: Path = field(default_factory=default_data_dir)  # 数据目录
@@ -270,6 +283,9 @@ class AppSettings:
             subdl_download_base_url=os.getenv("SUBDL_DOWNLOAD_BASE_URL", "https://dl.subdl.com"),
             subdl_languages=os.getenv("SUBDL_LANGUAGES", "ZH,EN"),
             subdl_include_traditional=parse_bool(os.getenv("SUBDL_INCLUDE_TRADITIONAL"), False),
+            subtitle_min_bilingual_ratio=parse_ratio(
+                os.getenv("SUBTITLE_MIN_BILINGUAL_RATIO"), DEFAULT_MIN_BILINGUAL_RATIO
+            ),
             opensubtitles_api_key=os.getenv("OPENSUBTITLES_API_KEY", ""),
             opensubtitles_username=os.getenv("OPENSUBTITLES_USERNAME", ""),
             opensubtitles_password=os.getenv("OPENSUBTITLES_PASSWORD", ""),

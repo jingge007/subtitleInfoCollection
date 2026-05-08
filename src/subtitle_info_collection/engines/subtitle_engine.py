@@ -277,6 +277,7 @@ TRADITIONAL_ONLY_CHARS = frozenset(TRADITIONAL_TO_SIMPLIFIED_MAP.keys())
 
 SUPPORTED_FORMATS = {"ass", "srt"}
 MIN_VALID_SUBTITLE_BYTES = 100 * 1024
+DEFAULT_MIN_BILINGUAL_RATIO = 0.70
 TEXT_DECODE_ENCODINGS = ["utf-8-sig", "utf-8", "gb18030", "gbk"]
 UTF16_DECODE_ENCODINGS = ["utf-16", "utf-16le", "utf-16be"]
 
@@ -380,7 +381,12 @@ class DownloadValidation:
     subtitle_format: str = ""
     encoding: str = ""
     content: str = ""
+    entry_count: int = 0
     bilingual_count: int = 0
+    chinese_only_count: int = 0
+    english_only_count: int = 0
+    bilingual_ratio: float = 0.0
+    min_bilingual_ratio: float = DEFAULT_MIN_BILINGUAL_RATIO
 
 
 def detect_subtitle_format(value: str = "") -> str:
@@ -665,6 +671,18 @@ def parse_subtitle_text(content: str, subtitle_format: str = "srt", movie_id: st
     return []
 
 
+def normalize_bilingual_ratio(value: float = DEFAULT_MIN_BILINGUAL_RATIO) -> float:
+    try:
+        ratio = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_BILINGUAL_RATIO
+    return max(0.0, min(1.0, ratio))
+
+
+def _format_percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
 def candidate_text(candidate: SubtitleCandidate) -> str:
     return re.sub(r"[_./\\()[\]{}-]+", " ", candidate.metadata_text()).strip()
 
@@ -784,7 +802,9 @@ def validate_downloaded_subtitle_bytes(
     subtitle_format: str = "",
     file_name: str = "",
     lenient: bool = False,
+    min_bilingual_ratio: float = DEFAULT_MIN_BILINGUAL_RATIO,
 ) -> DownloadValidation:
+    required_ratio = normalize_bilingual_ratio(min_bilingual_ratio)
     normalized_format = (
         detect_subtitle_format(subtitle_format)
         or detect_subtitle_format(file_name)
@@ -796,6 +816,7 @@ def validate_downloaded_subtitle_bytes(
             error_type=ErrorType.INVALID_FORMAT,
             reason="下载到的字幕不是 ass/srt 格式",
             subtitle_format=normalized_format,
+            min_bilingual_ratio=required_ratio,
         )
 
     if len(data) < MIN_VALID_SUBTITLE_BYTES:
@@ -807,6 +828,7 @@ def validate_downloaded_subtitle_bytes(
                 f"（当前 {len(data) / 1024:.1f} KB）"
             ),
             subtitle_format=normalized_format,
+            min_bilingual_ratio=required_ratio,
         )
 
     decoded = decode_subtitle_bytes(data)
@@ -820,32 +842,41 @@ def validate_downloaded_subtitle_bytes(
             subtitle_format=normalized_format,
             encoding=decoded.encoding,
             content=decoded.content,
+            min_bilingual_ratio=required_ratio,
         )
 
     entries = parse_subtitle_text(decoded.content, normalized_format, "validation")
-    bilingual_count = sum(1 for item in entries if item.zh_content.strip() and item.en_content.strip())
-    chinese_count = sum(1 for item in entries if item.zh_content.strip())
-    english_count = sum(1 for item in entries if item.en_content.strip())
+    bilingual_count = 0
+    chinese_only_count = 0
+    english_only_count = 0
+    for item in entries:
+        has_chinese = bool(item.zh_content.strip())
+        has_english = bool(item.en_content.strip())
+        if has_chinese and has_english:
+            bilingual_count += 1
+        elif has_chinese:
+            chinese_only_count += 1
+        elif has_english:
+            english_only_count += 1
 
-    if bilingual_count > 0:
+    entry_count = bilingual_count + chinese_only_count + english_only_count
+    bilingual_ratio = bilingual_count / entry_count if entry_count else 0.0
+
+    if entry_count > 0 and bilingual_ratio >= required_ratio:
         return DownloadValidation(
             valid=True,
             subtitle_format=normalized_format,
             encoding=decoded.encoding,
             content=decoded.content.lstrip("\ufeff"),
+            entry_count=entry_count,
             bilingual_count=bilingual_count,
+            chinese_only_count=chinese_only_count,
+            english_only_count=english_only_count,
+            bilingual_ratio=bilingual_ratio,
+            min_bilingual_ratio=required_ratio,
         )
 
-    if chinese_count > 0 and english_count > 0:
-        return DownloadValidation(
-            valid=True,
-            subtitle_format=normalized_format,
-            encoding=decoded.encoding,
-            content=decoded.content.lstrip("\ufeff"),
-            bilingual_count=0,
-        )
-
-    if chinese_count <= 0 and english_count <= 0:
+    if entry_count <= 0:
         return DownloadValidation(
             valid=False,
             error_type=ErrorType.CONTENT_VALIDATION_FAILED,
@@ -853,15 +884,28 @@ def validate_downloaded_subtitle_bytes(
             subtitle_format=normalized_format,
             encoding=decoded.encoding,
             content=decoded.content,
+            entry_count=entry_count,
             bilingual_count=0,
+            bilingual_ratio=0.0,
+            min_bilingual_ratio=required_ratio,
         )
 
     return DownloadValidation(
         valid=False,
         error_type=ErrorType.CONTENT_VALIDATION_FAILED,
-        reason="下载到的字幕没有同时包含中文和英文对白",
+        reason=(
+            f"双语条目占比 {_format_percent(bilingual_ratio)}，"
+            f"低于配置阈值 {_format_percent(required_ratio)}"
+            f"（有效条目 {entry_count}，双语 {bilingual_count}，"
+            f"中文-only {chinese_only_count}，英文-only {english_only_count}）"
+        ),
         subtitle_format=normalized_format,
         encoding=decoded.encoding,
         content=decoded.content,
-        bilingual_count=0,
+        entry_count=entry_count,
+        bilingual_count=bilingual_count,
+        chinese_only_count=chinese_only_count,
+        english_only_count=english_only_count,
+        bilingual_ratio=bilingual_ratio,
+        min_bilingual_ratio=required_ratio,
     )

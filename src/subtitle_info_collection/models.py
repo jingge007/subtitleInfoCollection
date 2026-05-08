@@ -333,6 +333,7 @@ class TaskConfig:
     )
     fallback_enabled: bool = True  # 是否启用兜底
     download_enabled: bool = True  # 是否启用下载
+    subtitle_min_bilingual_ratio: float = 0.70  # 下载字幕内容双语条目最低占比
     request_interval_ms: int = 13_000  # 请求间隔（毫秒）
     vote_count_min: int = 500  # 最小投票数
     output_root: Path | None = None  # 输出根目录

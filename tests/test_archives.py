@@ -27,6 +27,18 @@ def make_srt_bytes(repeat: int) -> bytes:
     return (block * repeat).encode()
 
 
+def make_mixed_srt_bytes(bilingual: int, chinese_only: int) -> bytes:
+    blocks = []
+    index = 1
+    for _ in range(bilingual):
+        blocks.append(f"{index}\n00:00:01,000 --> 00:00:02,000\n你好\nHello world\n\n")
+        index += 1
+    for _ in range(chinese_only):
+        blocks.append(f"{index}\n00:00:01,000 --> 00:00:02,000\n你好，这是中文字幕\n\n")
+        index += 1
+    return "".join(blocks).encode()
+
+
 def make_zip_payload(file_name: str, content: bytes) -> bytes:
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -55,3 +67,46 @@ def test_save_downloaded_payloads_accepts_zip_with_large_real_subtitle(tmp_path)
     assert len(saved_paths) == 1
     assert saved_paths[0].suffix == ".srt"
     assert saved_paths[0].stat().st_size > 100 * 1024
+
+
+def test_save_downloaded_payloads_rejects_zip_below_bilingual_ratio(tmp_path):
+    payload = DownloadedPayload(
+        file_name="subtitle.zip",
+        content=make_zip_payload("mostly-cn.srt", make_mixed_srt_bytes(2070, 930)),
+    )
+
+    with pytest.raises(CollectorError, match="双语条目占比 69.0%"):
+        save_downloaded_payloads([payload], tmp_path, "Example Movie", make_candidate())
+
+    assert not list(tmp_path.glob("*.srt"))
+
+
+def test_save_downloaded_payloads_uses_custom_bilingual_ratio(tmp_path):
+    payload = DownloadedPayload(
+        file_name="subtitle.zip",
+        content=make_zip_payload("half.srt", make_mixed_srt_bytes(1500, 1500)),
+    )
+
+    saved_paths = save_downloaded_payloads(
+        [payload],
+        tmp_path,
+        "Example Movie",
+        make_candidate(),
+        min_bilingual_ratio=0.50,
+    )
+
+    assert len(saved_paths) == 1
+    assert saved_paths[0].exists()
+
+
+def test_save_downloaded_payloads_skips_invalid_archive_file_and_saves_valid_one(tmp_path):
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("invalid.srt", make_mixed_srt_bytes(2070, 930))
+        archive.writestr("valid.srt", make_mixed_srt_bytes(2100, 900))
+    payload = DownloadedPayload(file_name="subtitle.zip", content=buffer.getvalue())
+
+    saved_paths = save_downloaded_payloads([payload], tmp_path, "Example Movie", make_candidate())
+
+    assert len(saved_paths) == 1
+    assert saved_paths[0].exists()
