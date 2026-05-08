@@ -36,6 +36,8 @@ class DownloadContext:
     request_interval_ms: int = 13_000  # 请求间隔（毫秒）
     request_verification: RequestVerificationCallback | None = None  # 验证请求回调
     log: LogCallback | None = None  # 日志回调
+    captcha_ocr_enabled: bool = True
+    captcha_auto_submit_min_confidence: float = 0.85
 
 
 class ProviderAdapter(Protocol):
@@ -56,4 +58,3 @@ class ProviderAdapter(Protocol):
     ) -> list[DownloadedPayload]:
         """下载字幕"""
         ...
-

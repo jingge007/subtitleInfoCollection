@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -722,10 +723,12 @@ class MainWindow(FluentWindow):
         source_label = StrongBodyLabel("字幕源")
         disabled_providers = set(self.settings.provider_disabled)
         self.subhd_check = CheckBox("SubHD", self)
+        self.subdl_check = CheckBox("SubDL", self)
         self.assrt_check = CheckBox("ASSRT", self)
         self.opensubtitles_check = CheckBox("OpenSubtitles", self)
         provider_checks = {
             "subhd": self.subhd_check,
+            "subdl": self.subdl_check,
             "assrt": self.assrt_check,
             "opensubtitles": self.opensubtitles_check,
         }
@@ -733,6 +736,7 @@ class MainWindow(FluentWindow):
             checkbox.setChecked(provider not in disabled_providers)
         row2.addWidget(source_label)
         row2.addWidget(self.subhd_check)
+        row2.addWidget(self.subdl_check)
         row2.addWidget(self.assrt_check)
         row2.addWidget(self.opensubtitles_check)
         row2.addStretch(1)
@@ -1301,6 +1305,8 @@ class MainWindow(FluentWindow):
         providers = []
         if self.subhd_check.isChecked():
             providers.append("subhd")
+        if self.subdl_check.isChecked():
+            providers.append("subdl")
         if self.assrt_check.isChecked():
             providers.append("assrt")
         if self.opensubtitles_check.isChecked():
@@ -1340,6 +1346,11 @@ class MainWindow(FluentWindow):
             tmdb_token=env_settings.tmdb_token,
             assrt_token=env_settings.assrt_token,
             assrt_api_base_url=env_settings.assrt_api_base_url,
+            subdl_api_key=env_settings.subdl_api_key,
+            subdl_base_url=env_settings.subdl_base_url,
+            subdl_download_base_url=env_settings.subdl_download_base_url,
+            subdl_languages=env_settings.subdl_languages,
+            subdl_include_traditional=env_settings.subdl_include_traditional,
             opensubtitles_api_key=env_settings.opensubtitles_api_key,
             opensubtitles_username=env_settings.opensubtitles_username,
             opensubtitles_password=env_settings.opensubtitles_password,
@@ -1347,6 +1358,8 @@ class MainWindow(FluentWindow):
             opensubtitles_user_agent=env_settings.opensubtitles_user_agent,
             provider_priority=env_settings.provider_priority,
             provider_disabled=env_settings.provider_disabled,
+            subhd_captcha_ocr_enabled=env_settings.subhd_captcha_ocr_enabled,
+            subhd_captcha_auto_submit_min_confidence=env_settings.subhd_captcha_auto_submit_min_confidence,
             proxies=env_settings.proxies(),
         )
         self.collect_log.clear()
@@ -1380,6 +1393,17 @@ class MainWindow(FluentWindow):
         self.collect_progress_label.setText(f"{percent}%")
         self.collect_status.setText(f"{current}/{total} {movie}")
 
+    def _pixmap_from_data_uri(self, data_uri: str) -> QPixmap:
+        if not data_uri.startswith("data:image/") or "," not in data_uri:
+            return QPixmap()
+        try:
+            image_bytes = base64.b64decode(data_uri.split(",", 1)[1], validate=False)
+        except ValueError:
+            return QPixmap()
+        pixmap = QPixmap()
+        pixmap.loadFromData(image_bytes)
+        return pixmap
+
     def handle_verification_request(self, payload: dict) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("SubHD 验证码")
@@ -1388,16 +1412,39 @@ class MainWindow(FluentWindow):
         layout = QVBoxLayout(dialog)
         layout.setSpacing(12)
         layout.addWidget(StrongBodyLabel(payload.get("subtitleTitle") or payload.get("detailUrl") or "需要验证码"))
+        image_data_uri = str(payload.get("verificationImageDataUri") or "")
+        pixmap = self._pixmap_from_data_uri(image_data_uri)
+        if not pixmap.isNull():
+            image_label = QLabel(self)
+            image_label.setAlignment(Qt.AlignCenter)
+            image_label.setStyleSheet(f"background: white; border: 1px solid {LINE_SOFT}; padding: 8px;")
+            image_label.setPixmap(
+                pixmap.scaled(360, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+            layout.addWidget(image_label)
         browser = QTextBrowser()
         browser.setHtml(payload.get("verificationHtml") or "请打开详情页查看验证码。")
         browser.setMinimumHeight(200)
         code_input = LineEdit(self)
+        suggested_code = str(payload.get("suggestedCode") or "").strip()
+        if suggested_code:
+            code_input.setText(suggested_code)
         code_input.setPlaceholderText("输入验证码")
+        if suggested_code:
+            confidence = float(payload.get("suggestedConfidence") or 0)
+            layout.addWidget(CaptionLabel(f"OCR suggestion: {suggested_code} ({confidence:.0%})"))
+        elif payload.get("ocrMessage"):
+            layout.addWidget(CaptionLabel(str(payload.get("ocrMessage"))))
         buttons = QHBoxLayout()
         submit = PrimaryPushButton("提交", self)
         cancel = PushButton("跳过", self)
+        open_detail = PushButton("打开详情页", self)
+        open_detail.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(str(payload.get("detailUrl") or "")))
+        )
         buttons.addWidget(submit)
         buttons.addWidget(cancel)
+        buttons.addWidget(open_detail)
         buttons.addStretch(1)
         layout.addWidget(browser)
         layout.addWidget(code_input)

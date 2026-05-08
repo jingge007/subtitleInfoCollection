@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import re
 from urllib.parse import quote, urljoin
 
 import httpx
 
 from ..errors import CollectorError, ErrorType, VerificationRequest
+from ..engines.captcha_solver import solve_captcha_data_uri
 from ..engines.scorer import normalize_text
 from ..engines.subtitle_engine import detect_subtitle_format
 from ..models import DownloadedPayload, MovieInfo, SubtitleCandidate, format_chinese_description
@@ -201,8 +203,32 @@ class SubhdProvider:
             payload = await self._request_download_payload(client, base_url, sid, "", down_url)
             if payload.get("pass") is False:
                 code = ""
-                verification_html = self._extract_verification_html(payload.get("msg") or down_page.text)
-                if context.request_verification:
+                code_from_ocr = False
+                verification_source = payload.get("msg") or down_page.text
+                verification_html = self._extract_verification_html(verification_source)
+                verification_image = await self._verification_image_data_uri(
+                    client,
+                    base_url,
+                    verification_html or verification_source,
+                    down_url,
+                )
+                ocr_result = (
+                    solve_captcha_data_uri(verification_image)
+                    if context.captcha_ocr_enabled and verification_image
+                    else None
+                )
+                if (
+                    ocr_result
+                    and ocr_result.text
+                    and ocr_result.confidence >= context.captcha_auto_submit_min_confidence
+                ):
+                    code = ocr_result.text
+                    code_from_ocr = True
+                    if context.log:
+                        context.log(
+                            f"SubHD captcha OCR auto-submit confidence={ocr_result.confidence:.0%}"
+                        )
+                elif context.request_verification:
                     code = await context.request_verification(
                         VerificationRequest(
                             provider=self.id,
@@ -210,11 +236,31 @@ class SubhdProvider:
                             subtitle_title=candidate.subtitle_title,
                             detail_url=detail_url,
                             verification_html=verification_html,
+                            verification_image_data_uri=verification_image,
+                            suggested_code=ocr_result.text if ocr_result else "",
+                            suggested_confidence=ocr_result.confidence if ocr_result else 0.0,
+                            ocr_message=ocr_result.message if ocr_result else "",
                         )
                     )
                 if not code:
                     raise CollectorError("已取消 SubHD 验证", ErrorType.VERIFICATION_REQUIRED, self.id)
                 payload = await self._request_download_payload(client, base_url, sid, code, down_url)
+                if payload.get("pass") is False and code_from_ocr and context.request_verification:
+                    code = await context.request_verification(
+                        VerificationRequest(
+                            provider=self.id,
+                            provider_subtitle_id=candidate.provider_subtitle_id,
+                            subtitle_title=candidate.subtitle_title,
+                            detail_url=detail_url,
+                            verification_html=verification_html,
+                            verification_image_data_uri=verification_image,
+                            suggested_code=ocr_result.text if ocr_result else "",
+                            suggested_confidence=ocr_result.confidence if ocr_result else 0.0,
+                            ocr_message="OCR code was rejected; please enter it manually.",
+                        )
+                    )
+                    if code:
+                        payload = await self._request_download_payload(client, base_url, sid, code, down_url)
 
             if payload.get("success") is False or payload.get("pass") is False or not payload.get("url"):
                 raise CollectorError(str(payload.get("msg") or "SubHD 没有返回下载地址"), ErrorType.DOWNLOAD_FAILED, self.id)
@@ -265,6 +311,63 @@ class SubhdProvider:
             return svg.group(0)
         img = re.search(r"<img[^>]+>", text, re.I)
         return img.group(0) if img else text
+
+    def _image_mime_type(self, url: str, fallback: str = "") -> str:
+        if fallback and fallback.lower().startswith("image/"):
+            return fallback.split(";", 1)[0].strip().lower()
+        suffix = url.split("?", 1)[0].rsplit(".", 1)[-1].lower() if "." in url else ""
+        if suffix == "svg":
+            return "image/svg+xml"
+        if suffix in {"jpg", "jpeg"}:
+            return "image/jpeg"
+        if suffix == "gif":
+            return "image/gif"
+        return "image/png"
+
+    def _to_data_uri(self, content: bytes, mime_type: str) -> str:
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    def _extract_image_src(self, html_text: str) -> str:
+        match = re.search(r"<img[^>]+\bsrc=[\"']?([^\"'\s>]+)", html_text, re.I)
+        return match.group(1) if match else ""
+
+    async def _verification_image_data_uri(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        verification_html: str,
+        referer: str,
+    ) -> str:
+        if not verification_html:
+            return ""
+        if verification_html.strip().startswith("data:image/"):
+            return verification_html.strip()
+        svg = re.search(r"<svg[^>]*>[\s\S]*?</svg>", verification_html, re.I)
+        if svg:
+            return self._to_data_uri(svg.group(0).encode("utf-8"), "image/svg+xml")
+        image_src = self._extract_image_src(verification_html)
+        if not image_src:
+            return ""
+        if image_src.startswith("data:image/"):
+            return image_src
+        image_url = urljoin(base_url, image_src)
+        try:
+            response = await client.get(
+                image_url,
+                headers={
+                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    "Referer": referer,
+                    "User-Agent": USER_AGENT,
+                },
+            )
+            response.raise_for_status()
+        except Exception:
+            return ""
+        return self._to_data_uri(
+            response.content,
+            self._image_mime_type(image_url, response.headers.get("content-type", "")),
+        )
 
     def _download_file_name(self, url: str, candidate: SubtitleCandidate) -> str:
         suffix = detect_subtitle_format(url) or detect_subtitle_format(candidate.subtitle_title) or "zip"

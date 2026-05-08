@@ -57,6 +57,10 @@ class VerificationRequest:
     subtitle_title: str  # 字幕标题
     detail_url: str  # 详情URL
     verification_html: str = ""  # 验证HTML
+    verification_image_data_uri: str = ""
+    suggested_code: str = ""
+    suggested_confidence: float = 0.0
+    ocr_message: str = ""
 
 
 class VerificationRequiredError(CollectorError):

@@ -12,10 +12,11 @@ except ImportError:  # pragma: no cover
     load_dotenv = None
 
 
-DEFAULT_PROVIDER_PRIORITY = ["subhd", "assrt", "opensubtitles"]
+DEFAULT_PROVIDER_PRIORITY = ["subhd", "subdl", "assrt", "opensubtitles"]
 DEFAULT_REQUEST_INTERVAL_MS = 13_000
 PROVIDER_LABELS = {
     "subhd": "SubHD",
+    "subdl": "SubDL",
     "assrt": "ASSRT",
     "opensubtitles": "OpenSubtitles",
 }
@@ -38,6 +39,24 @@ def parse_csv(value: str | None, fallback: list[str] | None = None) -> list[str]
 def parse_int(value: str | None, fallback: int) -> int:
     try:
         return int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def parse_bool(value: str | None, fallback: bool = False) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return fallback
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return fallback
+
+
+def parse_float(value: str | None, fallback: float) -> float:
+    try:
+        return float(str(value).strip())
     except (TypeError, ValueError):
         return fallback
 
@@ -164,6 +183,13 @@ def evaluate_config(
             detail="无需 Token，可直接搜索，下载时可能需要验证码。",
         ),
         ProviderConfigStatus(
+            id="subdl",
+            label=PROVIDER_LABELS["subdl"],
+            enabled="subdl" not in disabled,
+            configured=bool(settings.subdl_api_key.strip()),
+            detail="Requires SUBDL_API_KEY; default languages=ZH,EN for broader bilingual recall.",
+        ),
+        ProviderConfigStatus(
             id="assrt",
             label=PROVIDER_LABELS["assrt"],
             enabled="assrt" not in disabled,
@@ -209,6 +235,13 @@ def evaluate_config(
 @dataclass(slots=True)
 class AppSettings:
     """应用程序配置数据类"""
+    subdl_api_key: str = ""
+    subdl_base_url: str = "https://api.subdl.com/api/v1"
+    subdl_download_base_url: str = "https://dl.subdl.com"
+    subdl_languages: str = "ZH,EN"
+    subdl_include_traditional: bool = False
+    subhd_captcha_ocr_enabled: bool = True
+    subhd_captcha_auto_submit_min_confidence: float = 0.85
     data_dir: Path = field(default_factory=default_data_dir)  # 数据目录
     tmdb_token: str = ""  # TMDb访问令牌
     assrt_token: str = ""  # ASSRT访问令牌
@@ -232,6 +265,11 @@ class AppSettings:
             tmdb_token=os.getenv("TMDB_TOKEN", ""),
             assrt_token=os.getenv("ASSRT_TOKEN", ""),
             assrt_api_base_url=os.getenv("ASSRT_API_BASE_URL", "https://api.assrt.net/v1"),
+            subdl_api_key=os.getenv("SUBDL_API_KEY", ""),
+            subdl_base_url=os.getenv("SUBDL_BASE_URL", "https://api.subdl.com/api/v1"),
+            subdl_download_base_url=os.getenv("SUBDL_DOWNLOAD_BASE_URL", "https://dl.subdl.com"),
+            subdl_languages=os.getenv("SUBDL_LANGUAGES", "ZH,EN"),
+            subdl_include_traditional=parse_bool(os.getenv("SUBDL_INCLUDE_TRADITIONAL"), False),
             opensubtitles_api_key=os.getenv("OPENSUBTITLES_API_KEY", ""),
             opensubtitles_username=os.getenv("OPENSUBTITLES_USERNAME", ""),
             opensubtitles_password=os.getenv("OPENSUBTITLES_PASSWORD", ""),
@@ -248,6 +286,14 @@ class AppSettings:
             request_interval_ms=max(
                 12_000,
                 parse_int(os.getenv("SUBTITLE_REQUEST_INTERVAL_MS"), DEFAULT_REQUEST_INTERVAL_MS),
+            ),
+            subhd_captcha_ocr_enabled=parse_bool(os.getenv("SUBHD_CAPTCHA_OCR_ENABLED"), True),
+            subhd_captcha_auto_submit_min_confidence=max(
+                0.0,
+                min(
+                    1.0,
+                    parse_float(os.getenv("SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE"), 0.85),
+                ),
             ),
             http_proxy=os.getenv("HTTP_PROXY", ""),
             https_proxy=os.getenv("HTTPS_PROXY", ""),

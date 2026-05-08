@@ -5,7 +5,7 @@ Windows 桌面字幕信息自动采集工具，用于采集电影字幕候选、
 ## 功能概览
 
 - 从 TMDb 获取指定年份 Top 电影。
-- 从 SubHD、ASSRT、OpenSubtitles 搜索字幕候选。
+- 从 SubHD、SubDL、ASSRT、OpenSubtitles 搜索字幕候选。
 - 校验字幕格式、语言和文件大小，优先筛选真实文件大于 100KB 的中英双语 ASS/SRT 字幕。
 - 下载最佳字幕并打包为 ZIP。
 - 解析本地 SRT/ASS 文件，导出电影 JSON 和字幕 JSON。
@@ -49,6 +49,12 @@ OPENSUBTITLES_PASSWORD=你的 OpenSubtitles 密码
 OPENSUBTITLES_BASE_URL=https://api.opensubtitles.com/api/v1
 OPENSUBTITLES_USER_AGENT=subtitleInfoCollection v0.1
 
+SUBDL_API_KEY=你的 SubDL API Key
+SUBDL_BASE_URL=https://api.subdl.com/api/v1
+SUBDL_DOWNLOAD_BASE_URL=https://dl.subdl.com
+SUBDL_LANGUAGES=ZH,EN
+SUBDL_INCLUDE_TRADITIONAL=false
+
 CLASSIC_LINES_USERNAME=33 台词账号
 CLASSIC_LINES_PASSWORD=33 台词密码
 CLASSIC_LINES_TOKEN=
@@ -56,9 +62,11 @@ CLASSIC_LINES_TOKEN_TIME=
 BAIDU_TRANSLATE_APP_ID=
 BAIDU_TRANSLATE_SECRET=
 
-SUBTITLE_PROVIDER_PRIORITY=subhd,assrt,opensubtitles
+SUBTITLE_PROVIDER_PRIORITY=subhd,subdl,assrt,opensubtitles
 SUBTITLE_PROVIDER_DISABLED=
 SUBTITLE_REQUEST_INTERVAL_MS=13000
+SUBHD_CAPTCHA_OCR_ENABLED=true
+SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE=0.85
 
 SUBTITLE_COLLECTION_DATA_DIR=
 
@@ -70,7 +78,9 @@ HTTPS_PROXY=
 
 - `TMDB_TOKEN` 是采集电影列表所需的主要配置。
 - `ASSRT_TOKEN` 填写后可使用 ASSRT 字幕源。
+- `SUBDL_API_KEY` 填写后可使用 SubDL 官方 API，默认 `SUBDL_LANGUAGES=ZH,EN` 用于扩大候选召回，双语仍由下载后内容校验确认。
 - `OPENSUBTITLES_API_KEY` 用于搜索，用户名和密码用于下载。
+- `SUBHD_CAPTCHA_OCR_ENABLED` 开启 SubHD 验证码辅助识别；SVG 文本可直接解析，图片 OCR 会在本机安装 Pillow、pytesseract 和 Tesseract 后启用。
 - `CLASSIC_LINES_USERNAME` / `CLASSIC_LINES_PASSWORD` 用于自动化脚本自动登录 33 台词。
 - `CLASSIC_LINES_TOKEN` / `CLASSIC_LINES_TOKEN_TIME` 由自动化脚本成功登录后自动写入 `.env`。
 - `BAIDU_TRANSLATE_APP_ID` / `BAIDU_TRANSLATE_SECRET` 用于 Google 翻译失败后的百度翻译兜底。

@@ -9,6 +9,7 @@ from typing import Callable
 from .adapters.assrt import AssrtProvider
 from .adapters.base import DownloadContext, ProviderAdapter, ProviderHealth, RequestVerificationCallback
 from .adapters.opensubtitles import OpenSubtitlesProvider
+from .adapters.subdl import SubdlProvider
 from .adapters.subhd import SubhdProvider
 from .adapters.tmdb import TmdbClient
 from .engines.archives import safe_filename, save_downloaded_payloads
@@ -53,6 +54,13 @@ def get_run_paths(output_root: Path, year: int, limit: int, started_at: datetime
 def create_provider_registry(config: TaskConfig) -> dict[str, ProviderAdapter]:
     return {
         "subhd": SubhdProvider(),
+        "subdl": SubdlProvider(
+            api_key=config.subdl_api_key,
+            base_url=config.subdl_base_url,
+            download_base_url=config.subdl_download_base_url,
+            languages=config.subdl_languages,
+            include_traditional=config.subdl_include_traditional,
+        ),
         "assrt": AssrtProvider(
             token=config.assrt_token,
             base_url=config.assrt_api_base_url,
@@ -443,6 +451,8 @@ class SubtitleCollectionOrchestrator:
                         request_interval_ms=config.request_interval_ms,
                         request_verification=self.request_verification,
                         log=self.log,
+                        captcha_ocr_enabled=config.subhd_captcha_ocr_enabled,
+                        captcha_auto_submit_min_confidence=config.subhd_captcha_auto_submit_min_confidence,
                     ),
                 )
                 base_name = safe_filename(best.movie_title_zh or best.movie_title or best.provider_subtitle_id)

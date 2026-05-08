@@ -43,6 +43,10 @@ class CollectorWorker(QThread):
                 "subtitleTitle": request.subtitle_title,
                 "detailUrl": request.detail_url,
                 "verificationHtml": request.verification_html,
+                "verificationImageDataUri": request.verification_image_data_uri,
+                "suggestedCode": request.suggested_code,
+                "suggestedConfidence": request.suggested_confidence,
+                "ocrMessage": request.ocr_message,
             }
         )
         await asyncio.to_thread(self._verification_event.wait, 300)

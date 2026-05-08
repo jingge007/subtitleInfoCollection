@@ -318,11 +318,18 @@ class FailedRecord:
 @dataclass(slots=True)
 class TaskConfig:
     """任务配置数据类"""
+    subdl_api_key: str = ""
+    subdl_base_url: str = "https://api.subdl.com/api/v1"
+    subdl_download_base_url: str = "https://dl.subdl.com"
+    subdl_languages: str = "ZH,EN"
+    subdl_include_traditional: bool = False
+    subhd_captcha_ocr_enabled: bool = True
+    subhd_captcha_auto_submit_min_confidence: float = 0.85
     year: int = 2026  # 年份
     limit: int = 100  # 限制数量
     movie_source: str = "tmdb"  # 电影来源
     subtitle_providers: list[str] = field(  # 字幕源提供商列表
-        default_factory=lambda: ["subhd", "assrt", "opensubtitles"]
+        default_factory=lambda: ["subhd", "subdl", "assrt", "opensubtitles"]
     )
     fallback_enabled: bool = True  # 是否启用兜底
     download_enabled: bool = True  # 是否启用下载
@@ -339,7 +346,7 @@ class TaskConfig:
     opensubtitles_base_url: str = "https://api.opensubtitles.com/api/v1"  # OpenSubtitles API基础URL
     opensubtitles_user_agent: str = "subtitleInfoCollection v0.1"  # OpenSubtitles用户代理
     provider_priority: list[str] = field(  # 字幕源优先级
-        default_factory=lambda: ["subhd", "assrt", "opensubtitles"]
+        default_factory=lambda: ["subhd", "subdl", "assrt", "opensubtitles"]
     )
     provider_disabled: list[str] = field(default_factory=list)  # 禁用的字幕源
     proxies: dict[str, str] = field(default_factory=dict)  # 代理设置
