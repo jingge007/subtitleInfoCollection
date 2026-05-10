@@ -50,6 +50,7 @@ class SubhdProvider:
                             response.raise_for_status()
                             items = self._parse_movie_page(response.text, movie, page["url"])
                             if items:
+                                await self._enrich_candidates_with_detail_pages(client, items, headers)
                                 for item in items:
                                     item.description = format_chinese_description(
                                         ("搜索关键词", keyword),
@@ -81,6 +82,7 @@ class SubhdProvider:
                         html_text = await page.content()
                         items = self._parse_movie_page(html_text, movie, base_url)
                         if items:
+                            await self._enrich_candidates_with_playwright(page, items)
                             for item in items:
                                 item.description = format_chinese_description(
                                     ("搜索关键词", keyword),
@@ -120,11 +122,73 @@ class SubhdProvider:
         result: list[SubtitleCandidate] = []
         for link in soup.find_all("a", href=re.compile(r"^/a/")):
             subtitle_id = link.get("href", "").split("/a/")[-1].strip("/")
-            title = link.get_text(" ", strip=True)
-            row = link.find_parent(["div", "li", "tr"]) or link.parent
-            text = row.get_text(" ", strip=True) if row else title
+            text = self._candidate_container_text(link)
+            title = self._extract_result_title(link.get_text(" ", strip=True), text)
             result.append(self._make_candidate(subtitle_id, title, text, movie, page_url))
         return [item for item in result if item.provider_subtitle_id]
+
+    def _candidate_container_text(self, link) -> str:
+        best_text = link.get_text(" ", strip=True)
+        best_key = (-1, -len(best_text))
+        node = link
+        for _ in range(8):
+            if not node:
+                break
+            text = node.get_text(" ", strip=True)
+            if text:
+                class_names = " ".join(str(item) for item in (node.get("class") or []))
+                score = self._metadata_score(text)
+                if re.search(r"(bg-white|shadow|rounded|clearfix|position-relative|row)", class_names):
+                    score += 1
+                if len(text) > 1200:
+                    score -= 2
+                key = (score, -len(text))
+                if key > best_key:
+                    best_key = key
+                    best_text = text
+            node = getattr(node, "parent", None)
+        return best_text
+
+    def _metadata_score(self, text: str) -> int:
+        score = 0
+        if re.search(r"(双语|中英|简英|简繁英|chs.*eng|zh.*en)", text, re.I):
+            score += 4
+        if re.search(r"(简体|简中|chs|zh[-_ ]?cn|simplified)", text, re.I):
+            score += 3
+        if re.search(r"(英语|英文|英字|english|eng\b|\ben\b)", text, re.I):
+            score += 3
+        if detect_subtitle_format(text):
+            score += 3
+        if re.search(r"(发布人|转载|原创|最后更新|\d+k\b|\d{4}-\d{1,2}-\d{1,2})", text, re.I):
+            score += 1
+        return score
+
+    def _extract_result_title(self, link_title: str, container_text: str) -> str:
+        title = self._strip_subhd_title_labels(re.sub(r"\s+", " ", link_title or "").strip())
+        text = re.sub(r"\s+", " ", container_text or "").strip()
+        if not text:
+            return title
+        marker_split = re.split(
+            r"(?:转载精修|原创翻译|校订翻译|听译|双语|简体|繁体|英语|英文|SRT|ASS)",
+            text,
+            maxsplit=1,
+            flags=re.I,
+        )
+        prefix = self._strip_subhd_title_labels(marker_split[0].strip())
+        if title and prefix.startswith(f"{title} {title} "):
+            prefix = f"{title} {prefix[len(title + ' ' + title + ' '):]}"
+        if title and prefix == f"{title} {title}":
+            prefix = title
+        if prefix and len(prefix) <= 180 and (not title or len(prefix) > len(title)):
+            return prefix
+        return title or prefix
+
+    def _strip_subhd_title_labels(self, value: str) -> str:
+        return re.sub(
+            r"^(?:(?:字幕信息|下载次数|上传人|片源版本|字幕来源|字幕版本)\s+)+",
+            "",
+            value,
+        ).strip()
 
     def _parse_movie_page_regex(
         self, html_text: str, movie: MovieInfo, page_url: str
@@ -135,6 +199,7 @@ class SubhdProvider:
             end = min(len(html_text), match.end() + 1000)
             title = re.sub(r"<[^>]+>", "", match.group(2)).strip()
             text = re.sub(r"<[^>]+>", " ", html_text[start:end])
+            title = self._extract_result_title(title, text)
             result.append(self._make_candidate(match.group(1), title, text, movie, page_url))
         return result
 
@@ -179,12 +244,81 @@ class SubhdProvider:
             subtitle_format=detect_subtitle_format(text),
             download_count=max(numbers) if numbers else 0,
             detail_url=urljoin(page_url, f"/a/{subtitle_id}"),
+            download_url=urljoin(page_url, f"/down/{subtitle_id}"),
             description=format_chinese_description(
                 ("字幕标题", title),
                 ("页面内容", text),
             ),
             file_names=[title],
+            raw={"subhdText": text},
         )
+
+    def _needs_detail_metadata(self, candidate: SubtitleCandidate) -> bool:
+        language = candidate.language_type
+        has_language = bool(
+            language
+            and re.search(r"(双语|中英|简英)", language)
+            and re.search(r"(简体|简中|中文)", language)
+            and re.search(r"(英语|英文)", language)
+        )
+        return not candidate.subtitle_format or not has_language
+
+    def _detail_page_text(self, html_text: str) -> str:
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:  # pragma: no cover
+            return re.sub(r"<[^>]+>", " ", html_text)
+        soup = BeautifulSoup(html_text, "html.parser")
+        return soup.get_text(" ", strip=True)
+
+    def _merge_detail_metadata(self, candidate: SubtitleCandidate, html_text: str) -> None:
+        detail_text = self._detail_page_text(html_text)
+        combined_text = " ".join(
+            value
+            for value in [
+                candidate.subtitle_title,
+                candidate.description,
+                detail_text,
+            ]
+            if value
+        )
+        language_type = self._detect_language_type(combined_text)
+        if language_type and len(language_type) >= len(candidate.language_type):
+            candidate.language_type = language_type
+        subtitle_format = detect_subtitle_format(combined_text)
+        if subtitle_format:
+            candidate.subtitle_format = subtitle_format
+        candidate.description = format_chinese_description(
+            ("字幕标题", candidate.subtitle_title),
+            ("页面内容", combined_text),
+        )
+        candidate.raw["subhdDetailText"] = detail_text
+
+    async def _enrich_candidates_with_detail_pages(
+        self,
+        client: httpx.AsyncClient,
+        candidates: list[SubtitleCandidate],
+        headers: dict[str, str],
+    ) -> None:
+        for candidate in candidates:
+            if not self._needs_detail_metadata(candidate):
+                continue
+            try:
+                response = await client.get(candidate.detail_url, headers=headers)
+                response.raise_for_status()
+            except Exception:
+                continue
+            self._merge_detail_metadata(candidate, response.text)
+
+    async def _enrich_candidates_with_playwright(self, page, candidates: list[SubtitleCandidate]) -> None:
+        for candidate in candidates:
+            if not self._needs_detail_metadata(candidate):
+                continue
+            try:
+                await page.goto(candidate.detail_url, wait_until="networkidle", timeout=30_000)
+                self._merge_detail_metadata(candidate, await page.content())
+            except Exception:
+                continue
 
     async def download(self, candidate: SubtitleCandidate, context: DownloadContext) -> list[DownloadedPayload]:
         detail_url = candidate.detail_url or f"{self.base_urls[0]}/a/{candidate.provider_subtitle_id}"

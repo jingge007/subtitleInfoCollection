@@ -867,7 +867,7 @@ class MainWindow(FluentWindow):
         self.parse_status = BodyLabel("等待文件")
         self.parse_status.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 13px;")
         actions.addWidget(self.parse_button)
-        actions.addWidget(self.parse_status, 1)
+        actions.addStretch(1)
         action_card.viewLayout.addLayout(actions)
 
         export_options = QHBoxLayout()
@@ -889,21 +889,89 @@ class MainWindow(FluentWindow):
         export_options.addWidget(self.unicloud_import_switch)
         action_card.viewLayout.addLayout(export_options)
 
-        result_card = self._card("解析结果")
-        self.parse_table = QTableWidget(0, 5, self)
-        self.parse_table.setObjectName("dataTable")
-        self._configure_table(self.parse_table)
-        self.parse_table.setHorizontalHeaderLabels(
-            ["文件路径", "电影", "原始", "导出", "状态/关键词"]
+        task_card = self._card("任务状态")
+        task_inner = QVBoxLayout()
+        task_inner.setSpacing(8)
+        status_and_stats = QHBoxLayout()
+        status_and_stats.setSpacing(8)
+
+        self.parse_progress_ring = ProgressRing(self)
+        self.parse_progress_ring.setFixedSize(48, 48)
+        self.parse_progress_ring.setRange(0, 100)
+        self.parse_progress_ring.setValue(0)
+        self.parse_progress_ring.setStrokeWidth(5)
+
+        parse_status_info = QVBoxLayout()
+        parse_status_info.setSpacing(3)
+        self.parse_progress_label = CaptionLabel("0%")
+        self.parse_progress_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
+        parse_status_info.addWidget(self.parse_status)
+        parse_status_info.addWidget(self.parse_progress_label)
+        parse_status_info.addStretch(1)
+
+        status_panel = QWidget(self)
+        status_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        status_panel_layout = QHBoxLayout(status_panel)
+        status_panel_layout.setContentsMargins(0, 0, 0, 0)
+        status_panel_layout.setSpacing(10)
+        status_panel_layout.addWidget(self.parse_progress_ring)
+        status_panel_layout.addLayout(parse_status_info, 1)
+        status_and_stats.addWidget(status_panel, 3)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(6)
+        self.parse_stat_labels: dict[str, QLabel] = {}
+        for key, caption, color, bg_color, width in [
+            ("total", "字幕文件", PRIMARY, PRIMARY_SOFT, 82),
+            ("success", "成功", GREEN, GREEN_SOFT, 72),
+            ("failed", "失败", RED, RED_SOFT, 72),
+            ("exported", "导出条数", ORANGE, ORANGE_SOFT, 88),
+        ]:
+            stat = QFrame(self)
+            stat.setStyleSheet(
+                f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+            )
+            stat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            stat.setFixedWidth(width)
+            stat.setFixedHeight(48)
+            stat_layout = QVBoxLayout(stat)
+            stat_layout.setContentsMargins(8, 5, 8, 5)
+            stat_layout.setSpacing(1)
+            stat_layout.setAlignment(Qt.AlignCenter)
+            value = QLabel("0")
+            value.setAlignment(Qt.AlignCenter)
+            value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
+            label = CaptionLabel(caption)
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
+            stat_layout.addWidget(value)
+            stat_layout.addWidget(label)
+            self.parse_stat_labels[key] = value
+            stats_row.addWidget(stat)
+        status_and_stats.addLayout(stats_row, 0)
+        task_inner.addLayout(status_and_stats)
+
+        output_stat = QFrame(self)
+        output_stat.setStyleSheet(
+            f"background: {ORANGE_SOFT}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
         )
-        self.parse_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.parse_table.setColumnWidth(1, 220)
-        self.parse_table.setColumnWidth(2, 70)
-        self.parse_table.setColumnWidth(3, 70)
-        self.parse_table.setColumnWidth(4, 180)
-        for column in range(1, 5):
-            self.parse_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
-        result_card.viewLayout.addWidget(self.parse_table)
+        output_stat.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        output_layout = QVBoxLayout(output_stat)
+        output_layout.setContentsMargins(10, 6, 10, 6)
+        output_layout.setSpacing(2)
+        output_caption = CaptionLabel("输出文件")
+        output_caption.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
+        output_value = QLabel("-")
+        output_value.setWordWrap(True)
+        output_value.setMinimumWidth(0)
+        output_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        output_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        output_value.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {ORANGE};")
+        output_layout.addWidget(output_caption)
+        output_layout.addWidget(output_value)
+        self.parse_stat_labels["output"] = output_value
+        task_inner.addWidget(output_stat)
+        task_card.viewLayout.addLayout(task_inner)
 
         log_card = self._card("解析日志")
         self.parse_log = QtTextEdit(self)
@@ -911,8 +979,8 @@ class MainWindow(FluentWindow):
         log_card.viewLayout.addWidget(self.parse_log)
 
         layout.addWidget(action_card)
-        layout.addWidget(result_card, 3)
-        layout.addWidget(log_card, 2)
+        layout.addWidget(task_card)
+        layout.addWidget(log_card, 3)
         return page
 
     # ── History Tab ───────────────────────────────────────────────────
@@ -1010,7 +1078,7 @@ class MainWindow(FluentWindow):
         for key, caption, color, bg_color, width in [
             ("total", "采集条数", GREEN, GREEN_SOFT, 88),
             ("pages", "请求页数", PRIMARY, PRIMARY_SOFT, 88),
-            ("output", "输出文件", ORANGE, ORANGE_SOFT, 220),
+            ("output", "输出文件", ORANGE, ORANGE_SOFT, 360),
         ]:
             stat = QFrame(self)
             stat.setStyleSheet(
@@ -1018,7 +1086,7 @@ class MainWindow(FluentWindow):
             )
             stat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             stat.setFixedWidth(width)
-            stat.setFixedHeight(48)
+            stat.setFixedHeight(68 if key == "output" else 48)
             stat_layout = QVBoxLayout(stat)
             stat_layout.setContentsMargins(8, 5, 8, 5)
             stat_layout.setSpacing(1)
@@ -1026,6 +1094,10 @@ class MainWindow(FluentWindow):
             value = QLabel("0" if key != "output" else "-")
             value.setAlignment(Qt.AlignCenter)
             value.setWordWrap(True)
+            if key == "output":
+                value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                value.setMinimumWidth(0)
+                value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
             label = CaptionLabel(caption)
             label.setAlignment(Qt.AlignCenter)
@@ -1570,11 +1642,7 @@ class MainWindow(FluentWindow):
         self.automation_open_button.setEnabled(any(path.exists() for path in self.latest_automation_output_paths))
         self.automation_stat_labels["total"].setText(str(result.get("totalCount", 0)))
         self.automation_stat_labels["pages"].setText(str(result.get("pageCount", 0)))
-        output_label = (
-            f"{len(self.latest_automation_output_paths)} 个文件"
-            if len(self.latest_automation_output_paths) > 1
-            else (output_path.name or "-")
-        )
+        output_label = "\n".join(str(path) for path in self.latest_automation_output_paths) or "-"
         self.automation_stat_labels["output"].setText(output_label)
         self.automation_stat_labels["output"].setToolTip(
             "\n".join(str(path) for path in self.latest_automation_output_paths)
@@ -1590,7 +1658,12 @@ class MainWindow(FluentWindow):
             )
         for path in self.latest_automation_output_paths:
             self.append_automation_log(f"输出文件：{path}")
-        InfoBar.success("自动化脚本完成", f"输出 {output_label}", parent=self, position=InfoBarPosition.TOP, duration=5000)
+        toast_output = (
+            f"{len(self.latest_automation_output_paths)} 个文件"
+            if len(self.latest_automation_output_paths) > 1
+            else output_label
+        )
+        InfoBar.success("自动化脚本完成", f"输出 {toast_output}", parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     def automation_failed(self, message: str) -> None:
         self.automation_run_button.setEnabled(True)
@@ -1676,6 +1749,22 @@ class MainWindow(FluentWindow):
             InfoBar.warning("文件校验提示", "\n\n".join(parts), parent=self, position=InfoBarPosition.TOP, duration=5000)
 
         if not validated_files:
+            if skipped_small or skipped_suffix or skipped_invalid:
+                self.parse_log.clear()
+                self._reset_parse_stats()
+                self.parse_status.setText("文件校验未通过")
+                for item in skipped_suffix:
+                    self.parse_log.append(
+                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 跳过：{item} / 格式不符（仅支持 .srt/.ass）"
+                    )
+                for item in skipped_small:
+                    self.parse_log.append(
+                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 跳过：{item} / 文件过小"
+                    )
+                for item in skipped_invalid:
+                    self.parse_log.append(
+                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 跳过：{item}"
+                    )
             return
 
         try:
@@ -1683,9 +1772,23 @@ class MainWindow(FluentWindow):
         except ValueError as exc:
             InfoBar.warning("数据目录无效", str(exc), parent=self, position=InfoBarPosition.TOP, duration=3000)
             return
-        self.parse_table.setRowCount(0)
         self.parse_log.clear()
-        self.parse_status.setText("解析中")
+        self._reset_parse_stats()
+        self.parse_status.setText(f"解析中：共 {len(validated_files)} 个文件")
+        self.parse_stat_labels["total"].setText(str(len(validated_files)))
+        if skipped_suffix or skipped_small or skipped_invalid:
+            for item in skipped_suffix:
+                self.parse_log.append(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 跳过：{item} / 格式不符（仅支持 .srt/.ass）"
+                )
+            for item in skipped_small:
+                self.parse_log.append(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 跳过：{item} / 文件过小"
+                )
+            for item in skipped_invalid:
+                self.parse_log.append(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 跳过：{item}"
+                )
         self.parse_button.setEnabled(False)
         output_dir = data_dir / "parsed"
         env_settings = AppSettings.from_env(self.env_bootstrap.env_path)
@@ -1696,37 +1799,52 @@ class MainWindow(FluentWindow):
             self.unicloud_import_switch.isChecked(),
         )
         self.parser_worker.log_message.connect(self.parse_log.append)
-        self.parser_worker.file_parsed.connect(self.add_parse_row)
+        self.parser_worker.progress_changed.connect(self.update_parse_progress)
         self.parser_worker.finished_success.connect(self.parse_finished)
         self.parser_worker.finished_error.connect(self.parse_failed)
         self.parser_worker.start()
 
-    def add_parse_row(self, row: dict) -> None:
-        index = self.parse_table.rowCount()
-        self.parse_table.insertRow(index)
-        if "error" in row:
-            values = [row.get("file", ""), "-", "-", "-", row["error"]]
+    def _reset_parse_stats(self) -> None:
+        if not hasattr(self, "parse_stat_labels"):
+            return
+        for key, value in self.parse_stat_labels.items():
+            value.setText("-" if key == "output" else "0")
+            value.setToolTip("")
+        self.parse_progress_ring.setValue(0)
+        self.parse_progress_label.setText("0%")
+
+    def update_parse_progress(self, current: int, total: int, current_file: str) -> None:
+        percent = int(current / total * 100) if total else 0
+        self.parse_progress_ring.setValue(percent)
+        self.parse_progress_label.setText(f"{percent}%")
+        if current < total:
+            self.parse_status.setText(f"{current}/{total} 解析中：{current_file}")
         else:
-            values = [
-                row.get("file", ""),
-                row.get("title", ""),
-                row.get("originalCount", 0),
-                row.get("exportCount", 0),
-                row.get("matchedKeyword", ""),
-            ]
-        for column, value in enumerate(values):
-            item = QTableWidgetItem(str(value))
-            item.setToolTip(str(value))
-            if column in {2, 3}:
-                item.setTextAlignment(Qt.AlignCenter)
-            self.parse_table.setItem(index, column, item)
+            self.parse_status.setText(f"{current}/{total} 解析完成")
 
     def parse_finished(self, result: dict) -> None:
         self.parse_button.setEnabled(True)
+        self.parse_progress_ring.setValue(100)
+        self.parse_progress_label.setText("100%")
+        success_count = result.get("successCount", 0)
+        failure_count = result.get("failureCount", 0)
         self.parse_status.setText(
-            f"完成：成功 {len(result.get('successes', []))}，失败 {len(result.get('failures', []))}"
+            f"完成：成功 {success_count}，失败 {failure_count}"
         )
+        self.parse_stat_labels["total"].setText(str(result.get("totalCount", 0)))
+        self.parse_stat_labels["success"].setText(str(success_count))
+        self.parse_stat_labels["failed"].setText(str(failure_count))
+        self.parse_stat_labels["exported"].setText(str(result.get("exportCount", 0)))
+        output_paths = [str(path) for path in (result.get("outputPaths") or []) if str(path or "").strip()]
+        self.parse_stat_labels["output"].setText("\n".join(output_paths) if output_paths else "-")
+        self.parse_stat_labels["output"].setToolTip("\n".join(output_paths))
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.parse_log.append(
+            f"[{stamp}] 解析汇总：共 {result.get('totalCount', 0)} 个文件，"
+            f"成功 {success_count}，"
+            f"失败 {failure_count}，"
+            f"导出字幕 {result.get('exportCount', 0)} 条"
+        )
         self.parse_log.append(f"[{stamp}] 电影 JSON：{result.get('moviesPath')}")
         subtitles_paths = result.get("subtitlesPaths") or [result.get("subtitlesPath")]
         format_label = (
@@ -1751,6 +1869,8 @@ class MainWindow(FluentWindow):
     def parse_failed(self, message: str) -> None:
         self.parse_button.setEnabled(True)
         self.parse_status.setText("解析失败")
+        self.parse_progress_ring.setValue(0)
+        self.parse_progress_label.setText("失败")
         self.parse_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
         InfoBar.error("解析失败", message, parent=self, position=InfoBarPosition.TOP, duration=5000)
 

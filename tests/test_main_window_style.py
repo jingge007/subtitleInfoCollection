@@ -60,7 +60,8 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
         "settingsPage",
     }
 
-    assert len(window.findChildren(QTableWidget, "dataTable")) >= 2
+    assert len(window.findChildren(QTableWidget, "dataTable")) >= 1
+    assert window._parser_page.findChildren(QTableWidget, "dataTable") == []
     assert len(window.findChildren(QTextEdit, "logArea")) >= 2
     assert hasattr(window, "copy_automation_log_button")
     unicloud_switch = window.findChild(SwitchButton, "unicloudImportFormatSwitch")
@@ -72,7 +73,17 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     )
     assert automation_unicloud_switch is not None
     assert automation_unicloud_switch.isChecked()
-    assert window.parse_table.columnCount() == 5
+    assert not hasattr(window, "parse_table")
+    assert hasattr(window, "parse_progress_ring")
+    assert hasattr(window, "parse_progress_label")
+    assert set(window.parse_stat_labels) == {
+        "total",
+        "success",
+        "failed",
+        "exported",
+        "output",
+    }
+    assert window.parse_stat_labels["output"].wordWrap()
     assert window.history_table.columnCount() == 5
     assert not hasattr(window, "latest_records_layout")
     assert all(
@@ -84,6 +95,35 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     assert "自动化脚本" in button_texts or "执行" in button_texts
     assert "自动上传经典台词" not in button_texts
     assert "上传到经典台词" not in button_texts
+
+    window.close()
+    app.quit()
+
+
+def test_automation_status_shows_full_output_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = _app()
+    window = MainWindow()
+
+    first = tmp_path / "automation" / "classic-lines-1.json"
+    second = tmp_path / "automation" / "classic-lines-2.json"
+    first.parent.mkdir()
+    first.write_text("{}", encoding="utf-8")
+    second.write_text("{}", encoding="utf-8")
+
+    window.automation_finished(
+        {
+            "outputPath": str(first),
+            "outputPaths": [str(first), str(second)],
+            "totalCount": 2,
+            "pageCount": 1,
+        }
+    )
+
+    text = window.automation_stat_labels["output"].text()
+    assert str(first) in text
+    assert str(second) in text
+    assert "2 个文件" not in text
 
     window.close()
     app.quit()

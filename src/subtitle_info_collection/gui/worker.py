@@ -76,7 +76,7 @@ class CollectorWorker(QThread):
 
 class ParserWorker(QThread):
     log_message = Signal(str)
-    file_parsed = Signal(dict)
+    progress_changed = Signal(int, int, str)
     finished_success = Signal(dict)
     finished_error = Signal(str)
 
@@ -97,11 +97,13 @@ class ParserWorker(QThread):
         async def _run() -> None:
             movies_by_id = {}
             subtitles = []
-            successes = []
-            failures = []
+            success_count = 0
+            failure_count = 0
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
-            for path in self.files:
+            total = len(self.files)
+            for index, path in enumerate(self.files, start=1):
+                self.progress_changed.emit(index - 1, total, path.name)
                 try:
                     self.log_message.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 解析字幕：{path.name}")
                     parsed = await parse_local_subtitle_file(path, self.tmdb_token)
@@ -109,21 +111,12 @@ class ParserWorker(QThread):
                     movie_id = payload["movieId"]
                     movies_by_id[movie_id] = payload["movieData"]
                     subtitles.extend(payload["subtitlesData"])
-                    row = {
-                        "file": str(path),
-                        "title": payload["title"],
-                        "movieId": movie_id,
-                        "originalCount": parsed.original_subtitle_count,
-                        "exportCount": len(payload["subtitlesData"]),
-                        "matchedKeyword": parsed.matched_keyword,
-                    }
-                    successes.append(row)
-                    self.file_parsed.emit(row)
+                    success_count += 1
+                    self.progress_changed.emit(index, total, path.name)
                 except Exception as exc:  # noqa: BLE001
                     self.log_message.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 解析失败：{path.name} / {exc}")
-                    failure = {"file": str(path), "error": str(exc)}
-                    failures.append(failure)
-                    self.file_parsed.emit(failure)
+                    failure_count += 1
+                    self.progress_changed.emit(index, total, path.name)
 
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             movies_path = self.output_dir / f"{stamp}-movies.json"
@@ -145,8 +138,11 @@ class ParserWorker(QThread):
                     "subtitlesFormat": subtitles_export.export_format,
                     "subtitleSplitLimitBytes": subtitles_export.split_limit_bytes,
                     "subtitleOversizedRecords": subtitles_export.oversized_records,
-                    "successes": successes,
-                    "failures": failures,
+                    "totalCount": total,
+                    "successCount": success_count,
+                    "failureCount": failure_count,
+                    "exportCount": len(subtitles),
+                    "outputPaths": [str(movies_path), *[str(path) for path in subtitles_export.paths]],
                 }
             )
 
