@@ -1845,7 +1845,24 @@ class MainWindow(FluentWindow):
             f"失败 {failure_count}，"
             f"导出字幕 {result.get('exportCount', 0)} 条"
         )
-        self.parse_log.append(f"[{stamp}] 电影 JSON：{result.get('moviesPath')}")
+        movies_paths = result.get("moviesPaths") or [result.get("moviesPath")]
+        movies_format_label = (
+            "uniCloud jsonl"
+            if result.get("moviesFormat") == "unicloud-jsonl"
+            else "JSON 数组"
+        )
+        if len(movies_paths) > 1:
+            self.parse_log.append(
+                f"[{stamp}] 电影 JSON：{len(movies_paths)} 个文件（{movies_format_label}，45MB 拆分）"
+            )
+            for path in movies_paths:
+                self.parse_log.append(f"[{stamp}] - {path}")
+        else:
+            self.parse_log.append(f"[{stamp}] 电影 JSON：{movies_paths[0]}（{movies_format_label}）")
+        if result.get("moviesOversizedRecords"):
+            self.parse_log.append(
+                f"[{stamp}] 提示：{result.get('moviesOversizedRecords')} 条电影记录单条超过拆分限制，已单独写入文件"
+            )
         subtitles_paths = result.get("subtitlesPaths") or [result.get("subtitlesPath")]
         format_label = (
             "uniCloud jsonl"

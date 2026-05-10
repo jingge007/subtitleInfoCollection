@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from ..automation import ClassicLinesAutomationOptions, ClassicLinesAutomationRunner
-from ..local_parser import parse_local_subtitle_file, write_subtitle_export_files
+from ..local_parser import parse_local_subtitle_file, write_movie_export_files, write_subtitle_export_files
 from ..models import TaskConfig
 from ..orchestrator import SubtitleCollectionOrchestrator
 from ..storage import AppStorage
@@ -119,10 +119,11 @@ class ParserWorker(QThread):
                     self.progress_changed.emit(index, total, path.name)
 
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            movies_path = self.output_dir / f"{stamp}-movies.json"
-            movies_path.write_text(
-                json.dumps(list(movies_by_id.values()), ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            movies_export = write_movie_export_files(
+                list(movies_by_id.values()),
+                self.output_dir,
+                stamp,
+                unicloud_import_format=self.unicloud_import_format,
             )
             subtitles_export = write_subtitle_export_files(
                 subtitles,
@@ -132,7 +133,11 @@ class ParserWorker(QThread):
             )
             self.finished_success.emit(
                 {
-                    "moviesPath": str(movies_path),
+                    "moviesPath": str(movies_export.paths[0]),
+                    "moviesPaths": [str(path) for path in movies_export.paths],
+                    "moviesFormat": movies_export.export_format,
+                    "moviesSplitLimitBytes": movies_export.split_limit_bytes,
+                    "moviesOversizedRecords": movies_export.oversized_records,
                     "subtitlesPath": str(subtitles_export.paths[0]),
                     "subtitlesPaths": [str(path) for path in subtitles_export.paths],
                     "subtitlesFormat": subtitles_export.export_format,
@@ -142,7 +147,7 @@ class ParserWorker(QThread):
                     "successCount": success_count,
                     "failureCount": failure_count,
                     "exportCount": len(subtitles),
-                    "outputPaths": [str(movies_path), *[str(path) for path in subtitles_export.paths]],
+                    "outputPaths": [*[str(path) for path in movies_export.paths], *[str(path) for path in subtitles_export.paths]],
                 }
             )
 

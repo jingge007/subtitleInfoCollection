@@ -55,11 +55,84 @@ class ParsedSubtitleFile:
 
 
 @dataclass(slots=True)
+class MovieExportResult:
+    paths: list[Path]
+    export_format: str
+    split_limit_bytes: int | None = None
+    oversized_records: int = 0
+
+
+@dataclass(slots=True)
 class SubtitleExportResult:
     paths: list[Path]
     export_format: str
     split_limit_bytes: int | None = None
     oversized_records: int = 0
+
+
+def write_movie_export_files(
+    movies: list[dict[str, object]],
+    output_dir: Path,
+    stamp: str,
+    *,
+    unicloud_import_format: bool = True,
+    split_limit_bytes: int = UNICLOUD_IMPORT_SPLIT_BYTES,
+) -> MovieExportResult:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_path = output_dir / f"{stamp}-movies.json"
+
+    if not unicloud_import_format:
+        base_path.write_text(
+            json.dumps(movies, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return MovieExportResult(paths=[base_path], export_format="json-array")
+
+    if split_limit_bytes <= 0:
+        raise ValueError("split_limit_bytes must be greater than 0")
+
+    chunks: list[list[bytes]] = []
+    current_chunk: list[bytes] = []
+    current_size = 0
+    oversized_records = 0
+
+    for movie in movies:
+        line = (
+            json.dumps(movie, ensure_ascii=False, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        if len(line) > split_limit_bytes:
+            oversized_records += 1
+        if current_chunk and current_size + len(line) > split_limit_bytes:
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_size = 0
+        current_chunk.append(line)
+        current_size += len(line)
+
+    if current_chunk or not movies:
+        chunks.append(current_chunk)
+
+    if len(chunks) == 1:
+        base_path.write_bytes(b"".join(chunks[0]))
+        return MovieExportResult(
+            paths=[base_path],
+            export_format="unicloud-jsonl",
+            split_limit_bytes=split_limit_bytes,
+            oversized_records=oversized_records,
+        )
+
+    paths: list[Path] = []
+    for index, chunk in enumerate(chunks, start=1):
+        path = output_dir / f"{stamp}-movies-{index}.json"
+        path.write_bytes(b"".join(chunk))
+        paths.append(path)
+
+    return MovieExportResult(
+        paths=paths,
+        export_format="unicloud-jsonl",
+        split_limit_bytes=split_limit_bytes,
+        oversized_records=oversized_records,
+    )
 
 
 def write_subtitle_export_files(
