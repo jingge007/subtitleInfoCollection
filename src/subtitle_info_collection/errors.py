@@ -50,6 +50,12 @@ class CollectorError(Exception):
 
 
 @dataclass(slots=True)
+class VerificationResult:
+    code: str = ""
+    refresh: bool = False
+
+
+@dataclass(slots=True)
 class VerificationRequest:
     """验证请求数据类"""
     provider: str  # 字幕源提供商

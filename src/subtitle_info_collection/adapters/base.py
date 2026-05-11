@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 
-from ..errors import VerificationRequest
+from ..errors import VerificationRequest, VerificationResult
 from ..models import DownloadedPayload, MovieInfo, SubtitleCandidate
 
 
-RequestVerificationCallback = Callable[[VerificationRequest], Awaitable[str]]
+RequestVerificationCallback = Callable[[VerificationRequest], Awaitable[VerificationResult]]
 LogCallback = Callable[[str], None]
 
 

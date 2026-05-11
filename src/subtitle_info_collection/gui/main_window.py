@@ -101,6 +101,10 @@ class MainWindow(FluentWindow):
         self.automation_worker: AutomationScriptWorker | None = None
         self.latest_automation_output_path: Path | None = None
         self.latest_automation_output_paths: list[Path] = []
+        self._verification_dialog: QDialog | None = None
+        self._verification_image_label: QLabel | None = None
+        self._verification_code_input: LineEdit | None = None
+        self._verification_ocr_label: CaptionLabel | None = None
 
         self.setWindowTitle("字幕采集工具")
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
@@ -1478,36 +1482,63 @@ class MainWindow(FluentWindow):
         return pixmap
 
     def handle_verification_request(self, payload: dict) -> None:
+        if self._verification_dialog is not None:
+            self._update_verification_dialog(payload)
+            return
+
         dialog = QDialog(self)
         dialog.setWindowTitle("SubHD 验证码")
         dialog.setMinimumWidth(520)
         dialog.setStyleSheet(f"background: {SURFACE};")
         layout = QVBoxLayout(dialog)
         layout.setSpacing(12)
-        layout.addWidget(StrongBodyLabel(payload.get("subtitleTitle") or payload.get("detailUrl") or "需要验证码"))
+
+        title_label = StrongBodyLabel(payload.get("subtitleTitle") or payload.get("detailUrl") or "需要验证码")
+        layout.addWidget(title_label)
+
+        captcha_row = QHBoxLayout()
+        captcha_row.setSpacing(8)
+        image_label = QLabel(self)
+        image_label.setAlignment(Qt.AlignCenter)
+        image_label.setStyleSheet(f"background: white; border: 1px solid {LINE_SOFT}; padding: 8px; border-radius: 6px;")
         image_data_uri = str(payload.get("verificationImageDataUri") or "")
         pixmap = self._pixmap_from_data_uri(image_data_uri)
         if not pixmap.isNull():
-            image_label = QLabel(self)
-            image_label.setAlignment(Qt.AlignCenter)
-            image_label.setStyleSheet(f"background: white; border: 1px solid {LINE_SOFT}; padding: 8px;")
             image_label.setPixmap(
                 pixmap.scaled(360, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
-            layout.addWidget(image_label)
-        browser = QTextBrowser()
-        browser.setHtml(payload.get("verificationHtml") or "请打开详情页查看验证码。")
-        browser.setMinimumHeight(200)
+        captcha_row.addWidget(image_label, 1)
+
+        refresh_btn = TransparentToolButton(FIF.SYNC, self)
+        refresh_btn.setFixedSize(36, 36)
+        refresh_btn.setToolTip("刷新验证码")
+        refresh_btn.clicked.connect(self._on_captcha_refresh)
+        captcha_row.addWidget(refresh_btn, 0)
+        layout.addLayout(captcha_row)
+
+        input_row = QHBoxLayout()
+        input_row.setSpacing(8)
         code_input = LineEdit(self)
         suggested_code = str(payload.get("suggestedCode") or "").strip()
         if suggested_code:
             code_input.setText(suggested_code)
         code_input.setPlaceholderText("输入验证码")
+        input_row.addWidget(code_input, 1)
+
+        ocr_label = CaptionLabel("")
         if suggested_code:
             confidence = float(payload.get("suggestedConfidence") or 0)
-            layout.addWidget(CaptionLabel(f"OCR suggestion: {suggested_code} ({confidence:.0%})"))
+            ocr_label.setText(f"OCR: {suggested_code} ({confidence:.0%})")
         elif payload.get("ocrMessage"):
-            layout.addWidget(CaptionLabel(str(payload.get("ocrMessage"))))
+            ocr_label.setText(str(payload.get("ocrMessage")))
+        input_row.addWidget(ocr_label, 0)
+        layout.addLayout(input_row)
+
+        browser = QTextBrowser()
+        browser.setHtml(payload.get("verificationHtml") or "请打开详情页查看验证码。")
+        browser.setMaximumHeight(160)
+        layout.addWidget(browser)
+
         buttons = QHBoxLayout()
         submit = PrimaryPushButton("提交", self)
         cancel = PushButton("跳过", self)
@@ -1519,14 +1550,50 @@ class MainWindow(FluentWindow):
         buttons.addWidget(cancel)
         buttons.addWidget(open_detail)
         buttons.addStretch(1)
-        layout.addWidget(browser)
-        layout.addWidget(code_input)
         layout.addLayout(buttons)
+
+        self._verification_dialog = dialog
+        self._verification_image_label = image_label
+        self._verification_code_input = code_input
+        self._verification_ocr_label = ocr_label
+
         submit.clicked.connect(dialog.accept)
         cancel.clicked.connect(dialog.reject)
         accepted = dialog.exec() == QDialog.Accepted
+        self._verification_dialog = None
+        self._verification_image_label = None
+        self._verification_code_input = None
+        self._verification_ocr_label = None
         if self.collector_worker:
             self.collector_worker.submit_verification(code_input.text().strip() if accepted else "")
+
+    def _on_captcha_refresh(self) -> None:
+        if self.collector_worker:
+            self.collector_worker.request_captcha_refresh()
+
+    def _update_verification_dialog(self, payload: dict) -> None:
+        if self._verification_image_label:
+            image_data_uri = str(payload.get("verificationImageDataUri") or "")
+            pixmap = self._pixmap_from_data_uri(image_data_uri)
+            if not pixmap.isNull():
+                self._verification_image_label.setPixmap(
+                    pixmap.scaled(360, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+        if self._verification_code_input:
+            suggested_code = str(payload.get("suggestedCode") or "").strip()
+            if suggested_code:
+                self._verification_code_input.setText(suggested_code)
+            else:
+                self._verification_code_input.clear()
+        if self._verification_ocr_label:
+            suggested_code = str(payload.get("suggestedCode") or "").strip()
+            if suggested_code:
+                confidence = float(payload.get("suggestedConfidence") or 0)
+                self._verification_ocr_label.setText(f"OCR: {suggested_code} ({confidence:.0%})")
+            elif payload.get("ocrMessage"):
+                self._verification_ocr_label.setText(str(payload.get("ocrMessage")))
+            else:
+                self._verification_ocr_label.setText("")
 
     def collection_finished(self, result: dict) -> None:
         self.start_button.setEnabled(True)

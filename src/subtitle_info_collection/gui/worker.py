@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from ..automation import ClassicLinesAutomationOptions, ClassicLinesAutomationRunner
+from ..errors import VerificationResult
 from ..local_parser import parse_local_subtitle_file, write_movie_export_files, write_subtitle_export_files
 from ..models import TaskConfig
 from ..orchestrator import SubtitleCollectionOrchestrator
@@ -28,14 +29,21 @@ class CollectorWorker(QThread):
         self.database_path = database_path
         self._verification_event = threading.Event()
         self._verification_code = ""
+        self._verification_refresh = False
 
     def submit_verification(self, code: str) -> None:
         self._verification_code = code
+        self._verification_refresh = False
         self._verification_event.set()
 
-    async def _request_verification(self, request) -> str:
+    def request_captcha_refresh(self) -> None:
+        self._verification_refresh = True
+        self._verification_event.set()
+
+    async def _request_verification(self, request) -> VerificationResult:
         self._verification_event.clear()
         self._verification_code = ""
+        self._verification_refresh = False
         self.verification_requested.emit(
             {
                 "provider": request.provider,
@@ -50,7 +58,9 @@ class CollectorWorker(QThread):
             }
         )
         await asyncio.to_thread(self._verification_event.wait, 300)
-        return self._verification_code
+        if self._verification_refresh:
+            return VerificationResult(refresh=True)
+        return VerificationResult(code=self._verification_code)
 
     def run(self) -> None:
         async def _run() -> None:

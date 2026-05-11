@@ -6,7 +6,7 @@ from urllib.parse import quote, urljoin
 
 import httpx
 
-from ..errors import CollectorError, ErrorType, VerificationRequest
+from ..errors import CollectorError, ErrorType, VerificationRequest, VerificationResult
 from ..engines.captcha_solver import solve_captcha_data_uri
 from ..engines.scorer import normalize_text
 from ..engines.subtitle_engine import detect_subtitle_format
@@ -363,35 +363,18 @@ class SubhdProvider:
                             f"SubHD captcha OCR auto-submit confidence={ocr_result.confidence:.0%}"
                         )
                 elif context.request_verification:
-                    code = await context.request_verification(
-                        VerificationRequest(
-                            provider=self.id,
-                            provider_subtitle_id=candidate.provider_subtitle_id,
-                            subtitle_title=candidate.subtitle_title,
-                            detail_url=detail_url,
-                            verification_html=verification_html,
-                            verification_image_data_uri=verification_image,
-                            suggested_code=ocr_result.text if ocr_result else "",
-                            suggested_confidence=ocr_result.confidence if ocr_result else 0.0,
-                            ocr_message=ocr_result.message if ocr_result else "",
-                        )
+                    code = await self._request_user_captcha(
+                        client, base_url, sid, down_url, detail_url,
+                        candidate, context, verification_html, verification_image, ocr_result,
                     )
                 if not code:
                     raise CollectorError("已取消 SubHD 验证", ErrorType.VERIFICATION_REQUIRED, self.id)
                 payload = await self._request_download_payload(client, base_url, sid, code, down_url)
                 if payload.get("pass") is False and code_from_ocr and context.request_verification:
-                    code = await context.request_verification(
-                        VerificationRequest(
-                            provider=self.id,
-                            provider_subtitle_id=candidate.provider_subtitle_id,
-                            subtitle_title=candidate.subtitle_title,
-                            detail_url=detail_url,
-                            verification_html=verification_html,
-                            verification_image_data_uri=verification_image,
-                            suggested_code=ocr_result.text if ocr_result else "",
-                            suggested_confidence=ocr_result.confidence if ocr_result else 0.0,
-                            ocr_message="OCR code was rejected; please enter it manually.",
-                        )
+                    code = await self._request_user_captcha(
+                        client, base_url, sid, down_url, detail_url,
+                        candidate, context, verification_html, verification_image, ocr_result,
+                        ocr_message="OCR code was rejected; please enter it manually.",
                     )
                     if code:
                         payload = await self._request_download_payload(client, base_url, sid, code, down_url)
@@ -411,6 +394,51 @@ class SubhdProvider:
                     content_type=response.headers.get("content-type", ""),
                 )
             ]
+
+    async def _request_user_captcha(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        sid: str,
+        down_url: str,
+        detail_url: str,
+        candidate: SubtitleCandidate,
+        context: DownloadContext,
+        verification_html: str,
+        verification_image: str,
+        ocr_result: object | None,
+        ocr_message: str = "",
+    ) -> str:
+        while True:
+            result = await context.request_verification(
+                VerificationRequest(
+                    provider=self.id,
+                    provider_subtitle_id=candidate.provider_subtitle_id,
+                    subtitle_title=candidate.subtitle_title,
+                    detail_url=detail_url,
+                    verification_html=verification_html,
+                    verification_image_data_uri=verification_image,
+                    suggested_code=ocr_result.text if ocr_result else "",
+                    suggested_confidence=ocr_result.confidence if ocr_result else 0.0,
+                    ocr_message=ocr_message or (ocr_result.message if ocr_result else ""),
+                )
+            )
+            if not result.refresh:
+                return result.code
+            payload = await self._request_download_payload(client, base_url, sid, "", down_url)
+            if payload.get("pass") is not False:
+                return ""
+            verification_source = payload.get("msg") or ""
+            verification_html = self._extract_verification_html(verification_source)
+            verification_image = await self._verification_image_data_uri(
+                client, base_url, verification_html or verification_source, down_url,
+            )
+            ocr_result = (
+                solve_captcha_data_uri(verification_image)
+                if context.captcha_ocr_enabled and verification_image
+                else None
+            )
+            ocr_message = ""
 
     async def _request_download_payload(
         self,
