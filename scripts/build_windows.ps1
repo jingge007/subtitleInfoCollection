@@ -90,6 +90,35 @@ if (!(Test-Path ".venv")) {
 Invoke-CheckedCommand ".\.venv\Scripts\python.exe" @("-m", "pip", "install", "--upgrade", "pip")
 Invoke-CheckedCommand ".\.venv\Scripts\python.exe" @("-m", "pip", "install", "-e", ".[dev]")
 
+# 下载并配置 UPX 压缩工具
+$upxUrl = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
+$upxZipPath = Join-Path $PSScriptRoot "upx.zip"
+$upxDir = Join-Path $PSScriptRoot "upx"
+$upxExePath = Join-Path $upxDir "upx.exe"
+
+if (!(Test-Path $upxExePath)) {
+    Write-Host "正在下载 UPX 压缩工具..."
+    try {
+        Invoke-WebRequest -Uri $upxUrl -OutFile $upxZipPath -ErrorAction Stop
+        Expand-Archive -Path $upxZipPath -DestinationPath $upxDir -Force
+        # UPX 解压后会在子目录中，找到 upx.exe 并移动到上级目录
+        $upxExe = Get-ChildItem -Path $upxDir -Recurse -Filter "upx.exe" | Select-Object -First 1
+        if ($upxExe) {
+            Move-Item -Path $upxExe.FullName -Destination $upxExePath -Force
+        }
+        Remove-Item -Path $upxZipPath -Force -ErrorAction SilentlyContinue
+        Write-Host "UPX 下载完成：$upxExePath"
+    } catch {
+        Write-Host "警告: 无法下载 UPX，将不使用压缩：$($_.Exception.Message)"
+    }
+}
+
+# 将 UPX 目录添加到 PATH（如果可用）
+if (Test-Path $upxExePath) {
+    $env:PATH = "$upxDir;$env:PATH"
+    Write-Host "已启用 UPX 压缩：$upxExePath"
+}
+
 function Find-BrowserExecutable {
   param(
     [string]$BrowsersPath,
@@ -232,20 +261,8 @@ if ($runningPackageProcesses) {
 
 $pyinstallerArgs = @(
   "--clean",
-  "--noconfirm",
-  "--name", "字幕采集工具",
-  "--windowed",
-  "--specpath", (Join-Path $Root "build\spec"),
-  "--collect-all", "PySide6",
-  "--collect-all", "playwright",
-  "--add-data", "$Root\.env.example;."
+  "--noconfirm"
 )
-
-if (Test-Path ".env") {
-  Write-Host "检测到项目 .env 文件，将自动复制到打包目录。"
-  $pyinstallerArgs += "--add-data"
-  $pyinstallerArgs += "$Root\.env;."
-}
 
 if (![string]::IsNullOrWhiteSpace($configuredDistPath)) {
   Write-Host "检测到自定义打包输出目录：$packageOutputPath"
@@ -253,11 +270,44 @@ if (![string]::IsNullOrWhiteSpace($configuredDistPath)) {
   $pyinstallerArgs += $resolvedDistPath
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $Root "build\spec") | Out-Null
-
-Invoke-CheckedCommand ".\.venv\Scripts\pyinstaller.exe" ($pyinstallerArgs + @("src\subtitle_info_collection\main.py"))
+# 使用 spec 文件（已配置收集和排除规则）
+Invoke-CheckedCommand ".\.venv\Scripts\pyinstaller.exe" ($pyinstallerArgs + @("字幕采集工具.spec"))
 
 Start-Sleep -Seconds 5
 Copy-PlaywrightBrowserCache $playwrightBrowserSourcePath $packageOutputPath
+
+# 清理不必要的文件以减小体积
+Write-Host "开始清理不必要的文件..."
+
+# 删除翻译文件（.qm）- PySide6 翻译文件在运行时不需要
+$qmFiles = Get-ChildItem -Path $packageOutputPath -Filter "*.qm" -Recurse -ErrorAction SilentlyContinue
+if ($qmFiles) {
+    $qmFiles | Remove-Item -Force
+    Write-Host "  - 已删除 $($qmFiles.Count) 个翻译文件（.qm）"
+}
+
+# 删除类型注解文件（.pyi）- 运行时不需要
+$pyiFiles = Get-ChildItem -Path $packageOutputPath -Filter "*.pyi" -Recurse -ErrorAction SilentlyContinue
+if ($pyiFiles) {
+    $pyiFiles | Remove-Item -Force
+    Write-Host "  - 已删除 $($pyiFiles.Count) 个类型注解文件（.pyi）"
+}
+
+# 删除 __pycache__ 目录
+$pycacheDirs = Get-ChildItem -Path $packageOutputPath -Filter "__pycache__" -Recurse -Directory -ErrorAction SilentlyContinue
+if ($pycacheDirs) {
+    $pycacheDirs | Remove-Item -Recurse -Force
+    Write-Host "  - 已删除 $($pycacheDirs.Count) 个 __pycache__ 目录"
+}
+
+# 删除 .dist-info 和 .egg-info 目录（元数据不需要）
+$infoDirs = Get-ChildItem -Path $packageOutputPath -Filter "*.dist-info" -Recurse -Directory -ErrorAction SilentlyContinue
+$infoDirs += Get-ChildItem -Path $packageOutputPath -Filter "*.egg-info" -Recurse -Directory -ErrorAction SilentlyContinue
+if ($infoDirs) {
+    $infoDirs | Remove-Item -Recurse -Force
+    Write-Host "  - 已删除 $($infoDirs.Count) 个元数据目录（.dist-info/.egg-info）"
+}
+
+Write-Host "清理完成！"
 
 Write-Host "打包完成：$packageOutputPath"

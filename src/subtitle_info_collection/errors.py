@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import httpx
+
 
 class ErrorType:
     NETWORK_UNREACHABLE = "NETWORK_UNREACHABLE"
@@ -11,6 +13,7 @@ class ErrorType:
     DOWNLOAD_BLOCKED = "DOWNLOAD_BLOCKED"
     DOWNLOAD_QUOTA_EXCEEDED = "DOWNLOAD_QUOTA_EXCEEDED"
     DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
+    WAF_BLOCKED = "WAF_BLOCKED"
     PROVIDER_DISABLED = "PROVIDER_DISABLED"
     VERIFICATION_REQUIRED = "VERIFICATION_REQUIRED"
     INVALID_FORMAT = "INVALID_FORMAT"
@@ -27,6 +30,7 @@ ERROR_TYPE_LABELS = {
     ErrorType.DOWNLOAD_BLOCKED: "下载被阻止",
     ErrorType.DOWNLOAD_QUOTA_EXCEEDED: "下载额度已用完",
     ErrorType.DOWNLOAD_FAILED: "下载失败",
+    ErrorType.WAF_BLOCKED: "被WAF拦截",
     ErrorType.PROVIDER_DISABLED: "字幕源不可用",
     ErrorType.VERIFICATION_REQUIRED: "需要手动验证",
     ErrorType.INVALID_FORMAT: "字幕格式不符合要求",
@@ -84,7 +88,21 @@ def classify_exception(error: Exception) -> str:
     if isinstance(error, CollectorError):
         return error.error_type
 
+    # 优先识别 HTTP 状态码错误（如 httpx.HTTPStatusError）
+    if isinstance(error, httpx.HTTPStatusError):
+        status_code = error.response.status_code
+        if status_code == 429:
+            return ErrorType.RATE_LIMITED
+        if status_code in (401, 403):
+            return ErrorType.DOWNLOAD_BLOCKED
+        if status_code >= 500:
+            return ErrorType.DOWNLOAD_FAILED
+        if status_code >= 400:
+            return ErrorType.DOWNLOAD_FAILED
+
     message = str(error).lower()
+    if any(token in message for token in ["server error", "internal server error"]):
+        return ErrorType.DOWNLOAD_FAILED
     if any(token in message for token in ["quota", "remaining downloads", "download limit"]):
         return ErrorType.DOWNLOAD_QUOTA_EXCEEDED
     if any(token in message for token in ["429", "rate", "too many"]):

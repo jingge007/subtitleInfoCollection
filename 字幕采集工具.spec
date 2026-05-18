@@ -71,28 +71,145 @@ if package_dist_root:
     CONF['distpath'] = str(package_dist_root)
     print(f'检测到自定义打包输出目录：{package_output_path}')
 
-datas = [('.env.example', '.'), ('.env', '.')]
+datas = [('.env.example', '.'), ('.env', '.'), ('assets', 'assets')]
 binaries = []
 hiddenimports = []
+
+# 项目自身包
+tmp_ret = collect_all('subtitle_info_collection')
+datas += [(src, dst) for src, dst in tmp_ret[0] if not src.endswith('.pyi')]
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+
+# PySide6 - 收集后过滤 .pyi 和 .qm 文件
 tmp_ret = collect_all('PySide6')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+datas_pyside6 = [(src, dst) for src, dst in tmp_ret[0]
+                  if not (src.endswith('.pyi') or src.endswith('.qm'))]
+datas += datas_pyside6
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+
+# PySide6-Fluent-Widgets - 收集后过滤 .pyi 文件
+tmp_ret = collect_all('qfluentwidgets')
+datas_qfw = [(src, dst) for src, dst in tmp_ret[0]
+              if not src.endswith('.pyi')]
+datas += datas_qfw
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+
+# PySideSix-Frameless-Window
+tmp_ret = collect_all('PySideSix_Frameless_Window')
+datas += [(src, dst) for src, dst in tmp_ret[0] if not src.endswith('.pyi')]
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+
+# Playwright - 收集后过滤 .pyi 文件
 tmp_ret = collect_all('playwright')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+datas_playwright = [(src, dst) for src, dst in tmp_ret[0]
+                    if not src.endswith('.pyi')]
+datas += datas_playwright
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+
+# 其他运行时依赖
+for _pkg in ['httpx', 'tenacity', 'aiolimiter', 'charset_normalizer',
+             'pysubs2', 'dotenv', 'keyring', 'darkdetect',
+             'bs4', 'py7zr', 'Cryptodome', 'greenlet']:
+    try:
+        tmp_ret = collect_all(_pkg)
+        datas += [(src, dst) for src, dst in tmp_ret[0] if not src.endswith('.pyi')]
+        binaries += tmp_ret[1]
+        hiddenimports += tmp_ret[2]
+    except Exception:
+        pass
+
+# Playwright 浏览器 - 保留（根据用户选择）
 datas += collect_playwright_local_browsers()
 
 
 a = Analysis(
     ['src\\subtitle_info_collection\\main.py'],
-    pathex=[],
+    pathex=[str(PROJECT_ROOT / 'src')],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # 未使用的 PySide6 模块
+        'PySide6.Qt3DAnimation',
+        'PySide6.Qt3DCore',
+        'PySide6.Qt3DExtras',
+        'PySide6.Qt3DInput',
+        'PySide6.Qt3DLogic',
+        'PySide6.Qt3DRender',
+        'PySide6.Qt3DQuick',
+        'PySide6.Qt3DQuickAnimation',
+        'PySide6.Qt3DQuickExtras',
+        'PySide6.Qt3DQuickInput',
+        'PySide6.Qt3DQuickLogic',
+        'PySide6.Qt3DQuickRender',
+        'PySide6.Qt3DQuickScene2D',
+        'PySide6.QtCharts',
+        'PySide6.QtDataVisualization',
+        'PySide6.QtScxml',
+        'PySide6.QtSensors',
+        'PySide6.QtSerialPort',
+        'PySide6.QtVirtualKeyboard',
+        'PySide6.QtWebEngine',
+        'PySide6.QtWebEngineCore',
+        'PySide6.QtWebEngineWidgets',
+        'PySide6.QtWebEngineQuick',
+        'PySide6.QtWebChannel',
+        'PySide6.QtWebSockets',
+        'PySide6.QtHttpServer',
+        'PySide6.QtBluetooth',
+        'PySide6.QtDesigner',
+        'PySide6.QtHelp',
+        'PySide6.QtMultimedia',
+        'PySide6.QtMultimediaWidgets',
+        'PySide6.QtNfc',
+        'PySide6.QtOpenGL',
+        'PySide6.QtOpenGLWidgets',
+        'PySide6.QtPdf',
+        'PySide6.QtPdfWidgets',
+        'PySide6.QtPositioning',
+        'PySide6.QtPrintSupport',
+        'PySide6.QtQuick',
+        'PySide6.QtQuick3D',
+        'PySide6.QtQuickControls2',
+        'PySide6.QtQuickWidgets',
+        'PySide6.QtRemoteObjects',
+        'PySide6.QtTest',
+        'PySide6.QtTextToSpeech',
+        'PySide6.QtUiTools',
+        'PySide6.QtLocation',
+        'PySide6.QtQml',
+        
+        # 标准库中未使用的模块
+        'unittest',
+        'unittest.mock',
+        'ensurepip',
+        'venv',
+        'pydoc',
+        'doctest',
+        'lib2to3',
+        'tkinter',
+        'turtle',
+        'antigravity',
+        
+        # 开发工具（不应打包到生产环境）
+        'pip',
+        'setuptools',
+        'wheel',
+        'pytest',
+        'pytest-asyncio',
+        'ruff',
+        'pyinstaller',
+    ],
     noarchive=False,
-    optimize=0,
+    optimize=2,  # 使用 Python 优化模式，移除文档字符串
 )
 pyz = PYZ(a.pure)
 
@@ -102,6 +219,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name=APP_NAME,
+    icon='assets/head_logo.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

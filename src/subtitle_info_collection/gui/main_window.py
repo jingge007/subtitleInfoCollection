@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import os
 import shutil
+import winsound
+from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtGui import QPainter, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -21,6 +24,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QSizePolicy,
+    QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -87,6 +91,38 @@ CARD_VIEW_MARGINS = (14, 6, 14, 10)
 CARD_HEADER_MARGINS = (14, 8, 14, 0)
 
 
+def _play_captcha_alert() -> None:
+    """播放验证码提示音（Windows 系统感叹音）"""
+    try:
+        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+    except Exception:
+        pass
+
+
+def _flash_taskbar(window_handle: int) -> None:
+    """闪烁 Windows 任务栏图标以提醒用户"""
+    try:
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("hwnd", wintypes.HWND),
+                ("dwFlags", wintypes.DWORD),
+                ("uCount", wintypes.UINT),
+                ("dwTimeout", wintypes.DWORD),
+            ]
+
+        FLASHW_ALL = 0x00000003  # 闪烁标题栏 + 任务栏按钮
+        info = FLASHWINFO()
+        info.cbSize = ctypes.sizeof(FLASHWINFO)
+        info.hwnd = window_handle
+        info.dwFlags = FLASHW_ALL
+        info.uCount = 5       # 闪烁5次
+        info.dwTimeout = 0    # 使用默认光标闪烁频率
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
+    except Exception:
+        pass
+
+
 class MainWindow(FluentWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -103,6 +139,7 @@ class MainWindow(FluentWindow):
         self.latest_automation_output_paths: list[Path] = []
         self._verification_dialog: QDialog | None = None
         self._verification_image_label: QLabel | None = None
+        self._verification_svg_label: QLabel | None = None
         self._verification_code_input: LineEdit | None = None
         self._verification_ocr_label: CaptionLabel | None = None
 
@@ -110,6 +147,15 @@ class MainWindow(FluentWindow):
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         self._set_app_icon()
         self._apply_theme()
+
+        # 系统托盘图标（用于验证码最小化时的气泡通知）
+        self._tray_icon = QSystemTrayIcon(self)
+        tray_icon = self.windowIcon()
+        if tray_icon.isNull():
+            tray_icon = QIcon()
+        self._tray_icon.setIcon(tray_icon)
+        self._tray_icon.setToolTip("字幕采集工具")
+        self._tray_icon.show()
 
         self._dashboard_page = self._build_task_center_page()
         self._collector_page = self._build_collector_tab()
@@ -152,9 +198,12 @@ class MainWindow(FluentWindow):
         candidates: list[Path] = []
         if getattr(_sys, "frozen", False):
             candidates.append(Path(_sys.executable).parent / "assets" / "head_logo.png")
+            candidates.append(Path(_sys.executable).parent / "assets" / "head_logo.ico")
             candidates.append(Path(_sys.executable).parent / "_internal" / "assets" / "head_logo.png")
+            candidates.append(Path(_sys.executable).parent / "_internal" / "assets" / "head_logo.ico")
         else:
             candidates.append(Path(__file__).resolve().parents[3] / "assets" / "head_logo.png")
+            candidates.append(Path(__file__).resolve().parents[3] / "assets" / "head_logo.ico")
         for icon_path in candidates:
             if icon_path.exists():
                 self.setWindowIcon(QIcon(str(icon_path)))
@@ -1282,6 +1331,24 @@ class MainWindow(FluentWindow):
 
         config_inner.addLayout(cfg_row)
         config_inner.addLayout(env_row)
+
+        # 验证码提示音开关
+        sound_row = QHBoxLayout()
+        sound_row.setSpacing(10)
+        sound_label = StrongBodyLabel("验证码提示音")
+        sound_label.setFixedWidth(70)
+        self.captcha_sound_switch = SwitchButton(self)
+        self.captcha_sound_switch.setChecked(self.settings.captcha_sound_enabled)
+        self.captcha_sound_switch.setOnText("开")
+        self.captcha_sound_switch.setOffText("关")
+        sound_desc = CaptionLabel("验证码弹出时播放系统提示音（最小化时仍会闪烁任务栏和显示托盘通知）")
+        sound_desc.setStyleSheet(f"color: {TEXT_SOFT};")
+        sound_desc.setWordWrap(True)
+        sound_row.addWidget(sound_label)
+        sound_row.addWidget(self.captcha_sound_switch)
+        sound_row.addWidget(sound_desc, 1)
+        self.captcha_sound_switch.checkedChanged.connect(self._save_captcha_sound_to_env)
+        config_inner.addLayout(sound_row)
         config_card.viewLayout.addLayout(config_inner)
 
         maintenance_card = self._card("数据维护")
@@ -1437,6 +1504,8 @@ class MainWindow(FluentWindow):
             provider_disabled=env_settings.provider_disabled,
             subhd_captcha_ocr_enabled=env_settings.subhd_captcha_ocr_enabled,
             subhd_captcha_auto_submit_min_confidence=env_settings.subhd_captcha_auto_submit_min_confidence,
+            subhd_search_timeout=env_settings.subhd_search_timeout,
+            provider_search_timeout=env_settings.provider_search_timeout,
             proxies=env_settings.proxies(),
         )
         self.collect_log.clear()
@@ -1477,72 +1546,195 @@ class MainWindow(FluentWindow):
             image_bytes = base64.b64decode(data_uri.split(",", 1)[1], validate=False)
         except ValueError:
             return QPixmap()
+        mime = data_uri.split(",", 1)[0].split(":")[1].split(";")[0]
+        if mime == "image/svg+xml":
+            try:
+                from PySide6.QtSvg import QSvgRenderer
+                from PySide6.QtCore import QRectF
+                renderer = QSvgRenderer(image_bytes)
+                if not renderer.isValid():
+                    return QPixmap()
+                target_w = 480
+                target_h = 160
+                pixmap = QPixmap(target_w, target_h)
+                pixmap.fill(Qt.white)
+                painter = QPainter(pixmap)
+                renderer.render(painter, QRectF(0, 0, target_w, target_h))
+                painter.end()
+                return pixmap
+            except ImportError:
+                pixmap = QPixmap()
+                pixmap.loadFromData(image_bytes)
+                return pixmap
         pixmap = QPixmap()
         pixmap.loadFromData(image_bytes)
         return pixmap
 
+    @staticmethod
+    def _localize_ocr_message(message: str) -> str:
+        """将 OCR 英文错误消息映射为中文友好提示"""
+        _MAPPING = {
+            "captcha SVG contains no readable text": "自动识别失败，请手动输入",
+            "captcha SVG decode failed": "验证码解码失败，请手动输入",
+            "captcha image is unavailable": "验证码图片加载失败，请点击刷新",
+            "optional OCR dependencies are not installed": "OCR 功能未启用",
+            "OCR returned no captcha text": "自动识别无结果，请手动输入",
+        }
+        if not message:
+            return ""
+        for key, value in _MAPPING.items():
+            if key in message:
+                return value
+        if message.startswith("OCR failed:"):
+            return "自动识别失败，请手动输入"
+        return message
+
     def handle_verification_request(self, payload: dict) -> None:
+        # ── 验证码提醒（声音 + 托盘 + 闪烁）──
+        if self.settings.captcha_sound_enabled:
+            _play_captcha_alert()
+
+        subtitle_title = payload.get("subtitleTitle") or payload.get("detailUrl") or ""
+        self._tray_icon.showMessage(
+            "验证码提醒",
+            f"SubHD 需要输入验证码：{subtitle_title}" if subtitle_title else "SubHD 需要输入验证码",
+            QSystemTrayIcon.Information,
+            5000,
+        )
+
+        if self.isMinimized():
+            _flash_taskbar(int(self.winId()))
+
         if self._verification_dialog is not None:
             self._update_verification_dialog(payload)
             return
 
         dialog = QDialog(self)
         dialog.setWindowTitle("SubHD 验证码")
-        dialog.setMinimumWidth(520)
-        dialog.setStyleSheet(f"background: {SURFACE};")
-        layout = QVBoxLayout(dialog)
-        layout.setSpacing(12)
+        dialog.setMinimumWidth(480)
+        dialog.setMaximumWidth(520)
+        dialog.setStyleSheet(
+            f"QDialog {{ background: {SURFACE}; border-radius: 12px; }}"
+        )
 
-        title_label = StrongBodyLabel(payload.get("subtitleTitle") or payload.get("detailUrl") or "需要验证码")
-        layout.addWidget(title_label)
+        root = QVBoxLayout(dialog)
+        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(14)
 
-        captcha_row = QHBoxLayout()
-        captcha_row.setSpacing(8)
+        title_bar = QHBoxLayout()
+        title_bar.setSpacing(10)
+        icon_label = QLabel("🔐")
+        icon_label.setFixedSize(28, 28)
+        icon_label.setStyleSheet("font-size: 20px;")
+        title_bar.addWidget(icon_label)
+        title_text = StrongBodyLabel("SubHD 验证码")
+        title_text.setStyleSheet(f"font-size: 16px; color: {TEXT};")
+        title_bar.addWidget(title_text)
+        title_bar.addStretch(1)
+        root.addLayout(title_bar)
+
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(f"background: {LINE_SOFT}; border: none;")
+        root.addWidget(separator)
+
+        subtitle_title = payload.get("subtitleTitle") or payload.get("detailUrl") or ""
+        if subtitle_title:
+            sub_label = StrongBodyLabel(subtitle_title)
+            sub_label.setStyleSheet(f"color: {TEXT}; font-size: 14px;")
+            root.addWidget(sub_label)
+
+        provider_subtitle_id = str(payload.get("providerSubtitleId") or "").strip()
+        if provider_subtitle_id:
+            id_label = CaptionLabel(f"字幕ID: {provider_subtitle_id}")
+            id_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
+            root.addWidget(id_label)
+
+        captcha_frame = QFrame()
+        captcha_frame.setStyleSheet(
+            f"QFrame {{ background: white; border: 1px solid {LINE_SOFT}; border-radius: 8px; }}"
+        )
+        captcha_layout = QHBoxLayout(captcha_frame)
+        captcha_layout.setContentsMargins(12, 12, 8, 12)
+        captcha_layout.setSpacing(8)
+
         image_label = QLabel(self)
         image_label.setAlignment(Qt.AlignCenter)
-        image_label.setStyleSheet(f"background: white; border: 1px solid {LINE_SOFT}; padding: 8px; border-radius: 6px;")
+        image_label.setMinimumHeight(140)
+        image_label.setMaximumHeight(200)
         image_data_uri = str(payload.get("verificationImageDataUri") or "")
         pixmap = self._pixmap_from_data_uri(image_data_uri)
         if not pixmap.isNull():
             image_label.setPixmap(
-                pixmap.scaled(360, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pixmap.scaled(480, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
-        captcha_row.addWidget(image_label, 1)
+        else:
+            image_label.setText("验证码加载失败，请点击刷新")
+            image_label.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 13px;")
+        captcha_layout.addWidget(image_label, 1)
 
         refresh_btn = TransparentToolButton(FIF.SYNC, self)
         refresh_btn.setFixedSize(36, 36)
         refresh_btn.setToolTip("刷新验证码")
         refresh_btn.clicked.connect(self._on_captcha_refresh)
-        captcha_row.addWidget(refresh_btn, 0)
-        layout.addLayout(captcha_row)
+        captcha_layout.addWidget(refresh_btn, 0, Qt.AlignVCenter)
+        root.addWidget(captcha_frame)
 
-        input_row = QHBoxLayout()
-        input_row.setSpacing(8)
-        code_input = LineEdit(self)
-        suggested_code = str(payload.get("suggestedCode") or "").strip()
-        if suggested_code:
-            code_input.setText(suggested_code)
-        code_input.setPlaceholderText("输入验证码")
-        input_row.addWidget(code_input, 1)
+        svg_data = str(payload.get("verificationImageDataUri") or "")
+        svg_label = QLabel(self)
+        svg_label.setVisible(False)
+        if svg_data and "svg" in svg_data.lower():
+            try:
+                svg_content = base64.b64decode(svg_data.split(",", 1)[1]).decode("utf-8")
+                if svg_content.strip().startswith("<svg"):
+                    svg_label.setTextFormat(Qt.RichText)
+                    svg_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                    svg_label.setStyleSheet(f"background: white; border: 1px solid {LINE_SOFT}; border-radius: 8px; padding: 12px;")
+                    svg_label.setMinimumHeight(140)
+                    svg_label.setMaximumHeight(200)
+                    svg_label.setAlignment(Qt.AlignCenter)
+                    svg_label.setText(svg_content)
+                    svg_label.setVisible(True)
+                    root.addWidget(svg_label)
+            except Exception:
+                pass
 
         ocr_label = CaptionLabel("")
+        suggested_code = str(payload.get("suggestedCode") or "").strip()
         if suggested_code:
             confidence = float(payload.get("suggestedConfidence") or 0)
-            ocr_label.setText(f"OCR: {suggested_code} ({confidence:.0%})")
-        elif payload.get("ocrMessage"):
-            ocr_label.setText(str(payload.get("ocrMessage")))
-        input_row.addWidget(ocr_label, 0)
-        layout.addLayout(input_row)
+            ocr_label.setText(f"OCR 识别: {suggested_code} ({confidence:.0%})")
+            ocr_label.setStyleSheet(f"color: {GREEN}; font-size: 12px;")
+        else:
+            localized_msg = self._localize_ocr_message(str(payload.get("ocrMessage") or ""))
+            if localized_msg:
+                ocr_label.setText(localized_msg)
+                ocr_label.setStyleSheet(f"color: {RED}; font-size: 12px;")
+        root.addWidget(ocr_label)
 
-        browser = QTextBrowser()
-        browser.setHtml(payload.get("verificationHtml") or "请打开详情页查看验证码。")
-        browser.setMaximumHeight(160)
-        layout.addWidget(browser)
+        code_input = LineEdit(self)
+        if suggested_code:
+            code_input.setText(suggested_code)
+        code_input.setPlaceholderText("请输入验证码")
+        code_input.setFixedHeight(40)
+        code_input.setStyleSheet("font-size: 16px; border-radius: 8px;")
+        root.addWidget(code_input)
+
+        verification_html = str(payload.get("verificationHtml") or "").strip()
+        if verification_html and len(verification_html) > 10:
+            browser = QTextBrowser()
+            browser.setHtml(verification_html)
+            browser.setMaximumHeight(120)
+            root.addWidget(browser)
 
         buttons = QHBoxLayout()
+        buttons.setSpacing(10)
         submit = PrimaryPushButton("提交", self)
+        submit.setMinimumWidth(100)
         cancel = PushButton("跳过", self)
         open_detail = PushButton("打开详情页", self)
+        open_detail.setStyleSheet(f"color: {TEXT_SOFT};")
         open_detail.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(str(payload.get("detailUrl") or "")))
         )
@@ -1550,10 +1742,11 @@ class MainWindow(FluentWindow):
         buttons.addWidget(cancel)
         buttons.addWidget(open_detail)
         buttons.addStretch(1)
-        layout.addLayout(buttons)
+        root.addLayout(buttons)
 
         self._verification_dialog = dialog
         self._verification_image_label = image_label
+        self._verification_svg_label = svg_label if svg_label.isVisible() else None
         self._verification_code_input = code_input
         self._verification_ocr_label = ocr_label
 
@@ -1562,6 +1755,7 @@ class MainWindow(FluentWindow):
         accepted = dialog.exec() == QDialog.Accepted
         self._verification_dialog = None
         self._verification_image_label = None
+        self._verification_svg_label = None
         self._verification_code_input = None
         self._verification_ocr_label = None
         if self.collector_worker:
@@ -1572,12 +1766,21 @@ class MainWindow(FluentWindow):
             self.collector_worker.request_captcha_refresh()
 
     def _update_verification_dialog(self, payload: dict) -> None:
+        if self._verification_svg_label:
+            svg_data = str(payload.get("verificationImageDataUri") or "")
+            if svg_data and "svg" in svg_data.lower():
+                try:
+                    svg_content = base64.b64decode(svg_data.split(",", 1)[1]).decode("utf-8")
+                    if svg_content.strip().startswith("<svg"):
+                        self._verification_svg_label.setText(svg_content)
+                except Exception:
+                    pass
         if self._verification_image_label:
             image_data_uri = str(payload.get("verificationImageDataUri") or "")
             pixmap = self._pixmap_from_data_uri(image_data_uri)
             if not pixmap.isNull():
                 self._verification_image_label.setPixmap(
-                    pixmap.scaled(360, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    pixmap.scaled(480, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 )
         if self._verification_code_input:
             suggested_code = str(payload.get("suggestedCode") or "").strip()
@@ -1590,10 +1793,15 @@ class MainWindow(FluentWindow):
             if suggested_code:
                 confidence = float(payload.get("suggestedConfidence") or 0)
                 self._verification_ocr_label.setText(f"OCR: {suggested_code} ({confidence:.0%})")
-            elif payload.get("ocrMessage"):
-                self._verification_ocr_label.setText(str(payload.get("ocrMessage")))
+                self._verification_ocr_label.setStyleSheet("")
             else:
-                self._verification_ocr_label.setText("")
+                localized_msg = self._localize_ocr_message(str(payload.get("ocrMessage") or ""))
+                if localized_msg:
+                    self._verification_ocr_label.setText(localized_msg)
+                    self._verification_ocr_label.setStyleSheet("color: #ff6b6b; font-size: 12px;")
+                else:
+                    self._verification_ocr_label.setText("")
+                    self._verification_ocr_label.setStyleSheet("")
 
     def collection_finished(self, result: dict) -> None:
         self.start_button.setEnabled(True)
@@ -2000,6 +2208,26 @@ class MainWindow(FluentWindow):
         directory = QFileDialog.getExistingDirectory(self, "选择数据目录", self.data_dir_input.text())
         if directory:
             self.data_dir_input.setText(directory)
+
+    def _save_captcha_sound_to_env(self, checked: bool) -> None:
+        """保存验证码提示音开关到 .env 文件"""
+        env_path = self.env_bootstrap.env_path
+        key = "CAPTCHA_SOUND_ENABLED"
+        value = "true" if checked else "false"
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        updated = False
+        for index, line in enumerate(lines):
+            if line.strip().startswith(f"{key}="):
+                lines[index] = f"{key}={value}"
+                updated = True
+                break
+        if not updated:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(f"{key}={value}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.environ[key] = value
+        self.settings = AppSettings.from_env(self.env_bootstrap.env_path)
 
     def save_data_dir_to_env(self) -> None:
         try:

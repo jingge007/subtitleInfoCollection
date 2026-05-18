@@ -267,6 +267,13 @@ class SubtitleCollectionOrchestrator:
             }
             self.storage and self.storage.finish_task_run(run_id, "failed", result)
             raise
+        finally:
+            for provider in providers:
+                if hasattr(provider, "cleanup"):
+                    try:
+                        await provider.cleanup()
+                    except Exception:
+                        pass
 
     async def _resolve_movies(self, config: TaskConfig) -> list[MovieInfo]:
         if config.movie_source == "manual":
@@ -319,7 +326,8 @@ class SubtitleCollectionOrchestrator:
             provider_stats["searchCount"] = int(provider_stats["searchCount"]) + 1
             try:
                 await self._respect_rate_limit(config.request_interval_ms)
-                raw_candidates = await provider.search(movie)
+                timeout = config.subhd_search_timeout if provider.id == "subhd" else config.provider_search_timeout
+                raw_candidates = await asyncio.wait_for(provider.search(movie), timeout=timeout)
                 provider_valid: list[SubtitleCandidate] = []
                 provider_lenient: list[SubtitleCandidate] = []
                 for candidate in raw_candidates:
@@ -397,6 +405,22 @@ class SubtitleCollectionOrchestrator:
                     self.log(
                         f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 无匹配字幕"
                     )
+            except asyncio.TimeoutError:
+                provider_stats["errorCount"] = int(provider_stats["errorCount"]) + 1
+                provider_stats["lastError"] = f"搜索超时（{timeout}秒）"
+                provider_stats["lastErrorType"] = ErrorType.NETWORK_UNREACHABLE
+                self.log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 搜索超时（{timeout}秒），尝试下一个字幕源"
+                )
+                failed_records.append(
+                    FailedRecord(
+                        movie=movie,
+                        movie_name=movie.display_title,
+                        provider=provider.id,
+                        error_type=ErrorType.NETWORK_UNREACHABLE,
+                        error=f"搜索超时（{timeout}秒）",
+                    )
+                )
             except Exception as exc:  # noqa: BLE001
                 error_type = classify_exception(exc)
                 provider_stats["errorCount"] = int(provider_stats["errorCount"]) + 1
@@ -511,6 +535,7 @@ class SubtitleCollectionOrchestrator:
                 if retry < max_retries and error_type in {
                     ErrorType.NETWORK_UNREACHABLE,
                     ErrorType.RATE_LIMITED,
+                    ErrorType.DOWNLOAD_FAILED,
                 }:
                     wait_seconds = (retry + 1) * 5
                     self.log(

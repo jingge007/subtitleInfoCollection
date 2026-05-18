@@ -1,12 +1,63 @@
 import base64
+import json
 
 import httpx
 import pytest
 
 from subtitle_info_collection.adapters.subhd import SubhdProvider
+from subtitle_info_collection.adapters.base import DownloadContext
 from subtitle_info_collection.engines.captcha_solver import solve_captcha_data_uri
 from subtitle_info_collection.engines.subtitle_engine import validate_candidate_metadata
 from subtitle_info_collection.models import MovieInfo
+
+
+def test_is_valid_download_content_accepts_zip():
+    assert SubhdProvider._is_valid_download_content(b"PK\x03\x04" + b"\x00" * 100)
+
+
+def test_is_valid_download_content_accepts_rar():
+    assert SubhdProvider._is_valid_download_content(b"Rar!\x1a\x07" + b"\x00" * 100)
+
+
+def test_is_valid_download_content_accepts_7z():
+    assert SubhdProvider._is_valid_download_content(b"7z\xbc\xaf\x27\x1c" + b"\x00" * 100)
+
+
+def test_is_valid_download_content_accepts_gzip():
+    assert SubhdProvider._is_valid_download_content(b"\x1f\x8b\x08" + b"\x00" * 100)
+
+
+def test_is_valid_download_content_accepts_ass_subtitle():
+    content = b"[Script Info]\nTitle: Test\nScriptType: v4.00+"
+    assert SubhdProvider._is_valid_download_content(content)
+
+
+def test_is_valid_download_content_accepts_srt_subtitle():
+    content = b"1\n00:00:01,000 --> 00:00:04,000\nHello World"
+    assert SubhdProvider._is_valid_download_content(content)
+
+
+def test_is_valid_download_content_rejects_html():
+    assert not SubhdProvider._is_valid_download_content(b"<!doctype html><html><body>Error</body></html>")
+
+
+def test_is_valid_download_content_rejects_empty():
+    assert not SubhdProvider._is_valid_download_content(b"")
+    assert not SubhdProvider._is_valid_download_content(b"ab")
+
+
+def test_is_valid_download_content_rejects_unknown_binary():
+    assert not SubhdProvider._is_valid_download_content(b"\x00\x01\x02\x03" * 50)
+
+
+def test_is_html_content_detects_html():
+    assert SubhdProvider._is_html_content(b"<!doctype html><html></html>")
+    assert SubhdProvider._is_html_content(b"<html><head></head><body></body></html>")
+    assert SubhdProvider._is_html_content(b"<div>Error page</div>")
+
+
+def test_is_html_content_rejects_zip():
+    assert not SubhdProvider._is_html_content(b"PK\x03\x04" + b"\x00" * 100)
 
 
 def test_extract_verification_html_prefers_svg():
@@ -70,6 +121,49 @@ def test_parse_search_result_card_keeps_subhd_language_badges():
     assert validation.valid
 
 
+def test_parse_search_results_keeps_only_preferred_subhd_candidates():
+    provider = SubhdProvider()
+    movie = MovieInfo(
+        movie_id="tmdb-1300374",
+        title="The Green Mile",
+        original_title="The Green Mile",
+        title_zh="绿里奇迹",
+        year=1999,
+    )
+    html = """
+    <main>
+      <article class="bg-white shadow-sm rounded-3">
+        <a href="/a/FplMpG">绿里奇迹</a>
+        <a href="/a/FplMpG">The.Green.Mile.1999.1080p.BluRay.x264.DTS.Dualaudio-MySiLU</a>
+        <span>转载精修 双语 简体繁体英语 SRTASS</span>
+        <span>243k</span><span>136</span><span>2024-1-16 19:04</span>
+      </article>
+      <article class="bg-white shadow-sm rounded-3">
+        <a href="/a/IoF6Pv">绿里奇迹</a>
+        <span>转载精修 双语 简体英语 ASS</span>
+        <span>71k</span><span>5290</span>
+      </article>
+      <article class="bg-white shadow-sm rounded-3">
+        <a href="/a/OyZ42J">绿里奇迹</a>
+        <span>转载精修 简体 SUP</span>
+        <span>28330k</span><span>3</span>
+      </article>
+      <article class="bg-white shadow-sm rounded-3">
+        <a href="/a/FpMdrG">绿里奇迹</a>
+        <span>官方字幕 繁体英语 SUB</span>
+        <span>5973k</span><span>737</span>
+      </article>
+    </main>
+    """
+
+    items = provider._parse_search_results_page(html, movie, "https://subhd.tv")
+
+    assert [item.provider_subtitle_id for item in items] == ["FplMpG"]
+    assert items[0].subtitle_format == "ass"
+    assert items[0].download_count == 136
+    assert items[0].raw["fileSizeKB"] == 243
+
+
 def test_extract_result_title_removes_subhd_table_labels():
     provider = SubhdProvider()
 
@@ -106,6 +200,7 @@ async def test_enriches_subhd_candidate_from_detail_page_when_search_card_is_spa
           <h1>十月的天空</h1>
           <div>片源版本 十月的天空 October.Sky.1999.Bluray.1080p.DTS-HD.x264-Grym</div>
           <div>转载精修 双语 简体 繁体 英语 SRT ASS 212k 34 2023-12-8 19:45</div>
+          <a class="btn btn-danger down" href="/down/UKDipL">下载字幕文件</a>
         </section>
         """
         return httpx.Response(200, text=html)
@@ -122,6 +217,9 @@ async def test_enriches_subhd_candidate_from_detail_page_when_search_card_is_spa
     assert "简体" in candidate.language_type
     assert "英语" in candidate.language_type
     assert candidate.subtitle_format == "ass"
+    assert candidate.download_url == "https://subhd.tv/down/UKDipL"
+    assert candidate.raw["fileSizeKB"] == 212
+    assert candidate.download_count == 34
     assert validate_candidate_metadata(candidate).valid
 
 
@@ -174,3 +272,190 @@ async def test_verification_image_data_uri_returns_empty_when_missing():
         )
 
     assert data_uri == ""
+
+
+def test_is_cloudflare_block_detects_status_codes():
+    assert SubhdProvider._is_cloudflare_block("", 403) is True
+    assert SubhdProvider._is_cloudflare_block("", 500) is True
+    assert SubhdProvider._is_cloudflare_block("", 502) is True
+    assert SubhdProvider._is_cloudflare_block("", 503) is True
+    assert SubhdProvider._is_cloudflare_block("", 200) is False
+    assert SubhdProvider._is_cloudflare_block("", None) is False
+
+
+def test_is_cloudflare_block_detects_markers():
+    assert SubhdProvider._is_cloudflare_block("Just a moment...", 200) is True
+    assert SubhdProvider._is_cloudflare_block("cf-browser-verify", 200) is True
+    assert SubhdProvider._is_cloudflare_block("Checking your browser", 200) is True
+    assert SubhdProvider._is_cloudflare_block("_cf_chl_opt", 200) is True
+    assert SubhdProvider._is_cloudflare_block("challenge-platform", 200) is True
+
+
+def test_is_cloudflare_block_rejects_normal_html():
+    assert SubhdProvider._is_cloudflare_block("<html><body>Normal page</body></html>", 200) is False
+    assert SubhdProvider._is_cloudflare_block("肖申克的救赎 字幕下载", 200) is False
+
+
+def test_is_cloudflare_block_case_insensitive():
+    assert SubhdProvider._is_cloudflare_block("JUST A MOMENT...", 200) is True
+    assert SubhdProvider._is_cloudflare_block("Cf-Browser-Verify", 200) is True
+
+
+@pytest.mark.asyncio
+async def test_download_via_api_success():
+    provider = SubhdProvider()
+    movie = MovieInfo(movie_id="tmdb-1", title="Test", title_zh="测试", year=2020)
+    candidate = provider._make_candidate(
+        "ABC123", "测试字幕", "测试字幕 双语 简体 英语 SRT ASS 200k", movie, "https://subhd.tv"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/sub/down" in str(request.url):
+            return httpx.Response(200, json={"success": True, "url": "https://dl.subhd.tv/test/file.zip"})
+        if "dl.subhd.tv" in str(request.url):
+            return httpx.Response(200, content=b"PK\x03\x04" + b"\x00" * 100, headers={"content-type": "application/zip"})
+        return httpx.Response(200, text="ok")
+
+    transport = httpx.MockTransport(handler)
+    context = DownloadContext(log=lambda msg: None)
+
+    async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
+        result = await provider._download_via_api(client, "https://subhd.tv", candidate, context)
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].content[:2] == b"PK"
+
+
+@pytest.mark.asyncio
+async def test_download_via_api_captcha_then_success():
+    provider = SubhdProvider()
+    movie = MovieInfo(movie_id="tmdb-1", title="Test", title_zh="测试", year=2020)
+    candidate = provider._make_candidate(
+        "ABC123", "测试字幕", "测试字幕 双语 简体 英语 SRT ASS 200k", movie, "https://subhd.tv"
+    )
+
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        if "/api/sub/down" in str(request.url):
+            call_count += 1
+            if call_count == 1:
+                return httpx.Response(200, json={"success": False, "msg": "need captcha", "captcha_url": "/captcha.png"})
+            return httpx.Response(200, json={"success": True, "url": "https://dl.subhd.tv/test/file.zip"})
+        if "captcha.png" in str(request.url):
+            return httpx.Response(200, content=b"fake-png-data", headers={"content-type": "image/png"})
+        if "dl.subhd.tv" in str(request.url):
+            return httpx.Response(200, content=b"PK\x03\x04" + b"\x00" * 100, headers={"content-type": "application/zip"})
+        return httpx.Response(200, text="ok")
+
+    transport = httpx.MockTransport(handler)
+
+    class MockContext(DownloadContext):
+        def __init__(self):
+            self.log_messages = []
+            self.captcha_ocr_enabled = False
+            self.captcha_auto_submit_min_confidence = 0.8
+            self._request_verification = None
+
+        def log(self, msg):
+            self.log_messages.append(msg)
+
+        @property
+        def request_verification(self):
+            return self._request_verification
+
+        @request_verification.setter
+        def request_verification(self, value):
+            self._request_verification = value
+
+    context = MockContext()
+
+    from subtitle_info_collection.errors import VerificationRequest
+
+    async def mock_verify(vr: VerificationRequest):
+        from dataclasses import dataclass
+        @dataclass
+        class Result:
+            code: str = "abc1"
+            refresh: bool = False
+        return Result(code="abc1", refresh=False)
+
+    context._request_verification = mock_verify
+
+    async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
+        result = await provider._download_via_api(client, "https://subhd.tv", candidate, context)
+
+    assert call_count == 2
+    assert result is not None
+    assert result[0].content[:2] == b"PK"
+
+
+@pytest.mark.asyncio
+async def test_download_via_api_pass_false_svg_captcha_then_success():
+    provider = SubhdProvider()
+    movie = MovieInfo(movie_id="tmdb-1", title="Test", title_zh="测试", year=2020)
+    candidate = provider._make_candidate(
+        "ABC123",
+        "测试字幕 SRT ASS",
+        "测试字幕 双语 简体 英语 SRT ASS 200k",
+        movie,
+        "https://subhd.tv",
+    )
+    api_bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/api/sub/down" in str(request.url):
+            body = json.loads(request.content.decode("utf-8"))
+            api_bodies.append(body)
+            if len(api_bodies) == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "pass": False,
+                        "msg": '<svg width="80"><text>21ao</text></svg>',
+                    },
+                )
+            assert body == {"sid": "ABC123", "cap": "21ao"}
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "pass": True,
+                    "url": "https://dl.subhd.tv/test/file.zip",
+                },
+            )
+        if "dl.subhd.tv" in str(request.url):
+            return httpx.Response(
+                200,
+                content=b"PK\x03\x04" + b"\x00" * 100,
+                headers={"content-type": "application/zip"},
+            )
+        return httpx.Response(200, text="ok")
+
+    async def mock_verify(vr):
+        from subtitle_info_collection.errors import VerificationResult
+
+        assert vr.verification_html.startswith("<svg")
+        assert vr.verification_image_data_uri.startswith("data:image/svg+xml;base64,")
+        return VerificationResult(code="21ao")
+
+    transport = httpx.MockTransport(handler)
+    context = DownloadContext(
+        captcha_ocr_enabled=False,
+        request_verification=mock_verify,
+        log=lambda msg: None,
+    )
+
+    async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
+        result = await provider._download_via_api(client, "https://subhd.tv", candidate, context)
+
+    assert api_bodies == [
+        {"sid": "ABC123", "cap": ""},
+        {"sid": "ABC123", "cap": "21ao"},
+    ]
+    assert result is not None
+    assert result[0].file_name.endswith(".zip")
+    assert not result[0].file_name.endswith(".ass")

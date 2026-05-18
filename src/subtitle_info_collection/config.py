@@ -15,6 +15,8 @@ except ImportError:  # pragma: no cover
 DEFAULT_PROVIDER_PRIORITY = ["subhd", "subdl", "assrt", "opensubtitles"]
 DEFAULT_REQUEST_INTERVAL_MS = 13_000
 DEFAULT_MIN_BILINGUAL_RATIO = 0.70
+DEFAULT_SUBHD_SEARCH_TIMEOUT = 120
+DEFAULT_PROVIDER_SEARCH_TIMEOUT = 90
 PROVIDER_LABELS = {
     "subhd": "SubHD",
     "subdl": "SubDL",
@@ -255,6 +257,9 @@ class AppSettings:
     subtitle_min_bilingual_ratio: float = DEFAULT_MIN_BILINGUAL_RATIO
     subhd_captcha_ocr_enabled: bool = True
     subhd_captcha_auto_submit_min_confidence: float = 0.85
+    captcha_sound_enabled: bool = True  # 验证码弹出时播放系统提示音
+    subhd_search_timeout: int = DEFAULT_SUBHD_SEARCH_TIMEOUT
+    provider_search_timeout: int = DEFAULT_PROVIDER_SEARCH_TIMEOUT
     data_dir: Path = field(default_factory=default_data_dir)  # 数据目录
     tmdb_token: str = ""  # TMDb访问令牌
     assrt_token: str = ""  # ASSRT访问令牌
@@ -310,6 +315,15 @@ class AppSettings:
                     1.0,
                     parse_float(os.getenv("SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE"), 0.85),
                 ),
+            ),
+            captcha_sound_enabled=parse_bool(os.getenv("CAPTCHA_SOUND_ENABLED"), True),
+            subhd_search_timeout=max(
+                30,
+                parse_int(os.getenv("SUBHD_SEARCH_TIMEOUT"), DEFAULT_SUBHD_SEARCH_TIMEOUT),
+            ),
+            provider_search_timeout=max(
+                30,
+                parse_int(os.getenv("PROVIDER_SEARCH_TIMEOUT"), DEFAULT_PROVIDER_SEARCH_TIMEOUT),
             ),
             http_proxy=os.getenv("HTTP_PROXY", ""),
             https_proxy=os.getenv("HTTPS_PROXY", ""),
