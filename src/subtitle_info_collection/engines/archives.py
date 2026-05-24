@@ -417,7 +417,7 @@ def save_downloaded_payloads(
         if last_error:
             raise last_error
         raise CollectorError(
-            f"下载的载荷不包含大于 {MIN_VALID_SUBTITLE_BYTES // 1024}KB 的有效 ass/srt 字幕",
+            "下载的载荷不包含有效的中英双语 ass/srt 字幕",
             ErrorType.DOWNLOAD_FAILED,
         )
 

@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Callable
 
 from .adapters.assrt import AssrtProvider
-from .adapters.base import DownloadContext, ProviderAdapter, ProviderHealth, RequestVerificationCallback
+from .adapters.base import (
+    DownloadContext,
+    ProviderAdapter,
+    ProviderHealth,
+    RequestVerificationCallback,
+    proxy_from_mapping,
+)
 from .adapters.opensubtitles import OpenSubtitlesProvider
 from .adapters.subdl import SubdlProvider
 from .adapters.subhd import SubhdProvider
@@ -52,19 +58,22 @@ def get_run_paths(output_root: Path, year: int, limit: int, started_at: datetime
 
 
 def create_provider_registry(config: TaskConfig) -> dict[str, ProviderAdapter]:
+    proxy_url = proxy_from_mapping(config.proxies)
     return {
-        "subhd": SubhdProvider(),
+        "subhd": SubhdProvider(proxy=proxy_url),
         "subdl": SubdlProvider(
             api_key=config.subdl_api_key,
             base_url=config.subdl_base_url,
             download_base_url=config.subdl_download_base_url,
             languages=config.subdl_languages,
             include_traditional=config.subdl_include_traditional,
+            proxy=proxy_url,
         ),
         "assrt": AssrtProvider(
             token=config.assrt_token,
             base_url=config.assrt_api_base_url,
             request_interval_ms=config.request_interval_ms,
+            proxy=proxy_url,
         ),
         "opensubtitles": OpenSubtitlesProvider(
             api_key=config.opensubtitles_api_key,
@@ -72,6 +81,7 @@ def create_provider_registry(config: TaskConfig) -> dict[str, ProviderAdapter]:
             password=config.opensubtitles_password,
             base_url=config.opensubtitles_base_url,
             user_agent=config.opensubtitles_user_agent,
+            proxy=proxy_url,
         ),
     }
 
@@ -327,7 +337,14 @@ class SubtitleCollectionOrchestrator:
             try:
                 await self._respect_rate_limit(config.request_interval_ms)
                 timeout = config.subhd_search_timeout if provider.id == "subhd" else config.provider_search_timeout
-                raw_candidates = await asyncio.wait_for(provider.search(movie), timeout=timeout)
+                self.log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id}.search.start "
+                    f"开始搜索字幕源 provider={provider.id} movie={movie.display_title}"
+                )
+                raw_candidates = await asyncio.wait_for(
+                    provider.search(movie, log=self.log),
+                    timeout=timeout,
+                )
                 provider_valid: list[SubtitleCandidate] = []
                 provider_lenient: list[SubtitleCandidate] = []
                 for candidate in raw_candidates:
@@ -428,7 +445,9 @@ class SubtitleCollectionOrchestrator:
                 provider_stats["lastError"] = error_msg
                 provider_stats["lastErrorType"] = error_type
                 self.log(
-                    f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 搜索异常：{error_msg}"
+                    f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id}.search.fail "
+                    f"搜索异常 provider={provider.id} movie={movie.display_title} "
+                    f"error_type={error_type} error={error_msg}"
                 )
                 failed_records.append(
                     FailedRecord(

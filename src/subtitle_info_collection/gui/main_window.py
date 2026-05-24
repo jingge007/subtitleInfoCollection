@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import ctypes
 import os
 import shutil
@@ -82,6 +83,8 @@ from .styles import (
 )
 from .worker import AutomationScriptWorker, CollectorWorker, ParserWorker
 
+logger = logging.getLogger(__name__)
+
 
 DEFAULT_WINDOW_WIDTH = 1100
 DEFAULT_WINDOW_HEIGHT = 580
@@ -139,7 +142,7 @@ class MainWindow(FluentWindow):
         self.latest_automation_output_paths: list[Path] = []
         self._verification_dialog: QDialog | None = None
         self._verification_image_label: QLabel | None = None
-        self._verification_svg_label: QLabel | None = None
+        self._verification_refresh_btn: TransparentToolButton | None = None
         self._verification_code_input: LineEdit | None = None
         self._verification_ocr_label: CaptionLabel | None = None
 
@@ -1590,6 +1593,17 @@ class MainWindow(FluentWindow):
         return message
 
     def handle_verification_request(self, payload: dict) -> None:
+        subtitle_title = payload.get("subtitleTitle") or payload.get("detailUrl") or ""
+        subtitle_id = str(payload.get("providerSubtitleId") or "").strip()
+        captcha_type = "none"
+        image_data_uri = str(payload.get("verificationImageDataUri") or "")
+        if image_data_uri:
+            captcha_type = "svg" if "svg" in image_data_uri.lower() else "image"
+        logger.info(
+            "subhd.captcha.dialog.open subtitle_title=%s subtitle_id=%s captcha_type=%s",
+            subtitle_title, subtitle_id, captcha_type,
+        )
+
         # ── 验证码提醒（声音 + 托盘 + 闪烁）──
         if self.settings.captcha_sound_enabled:
             _play_captcha_alert()
@@ -1642,6 +1656,8 @@ class MainWindow(FluentWindow):
         subtitle_title = payload.get("subtitleTitle") or payload.get("detailUrl") or ""
         if subtitle_title:
             sub_label = StrongBodyLabel(subtitle_title)
+            sub_label.setWordWrap(True)
+            sub_label.setMaximumWidth(460)
             sub_label.setStyleSheet(f"color: {TEXT}; font-size: 14px;")
             root.addWidget(sub_label)
 
@@ -1651,54 +1667,55 @@ class MainWindow(FluentWindow):
             id_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
             root.addWidget(id_label)
 
-        captcha_frame = QFrame()
-        captcha_frame.setStyleSheet(
-            f"QFrame {{ background: white; border: 1px solid {LINE_SOFT}; border-radius: 8px; }}"
-        )
-        captcha_layout = QHBoxLayout(captcha_frame)
-        captcha_layout.setContentsMargins(12, 12, 8, 12)
-        captcha_layout.setSpacing(8)
+        # Unified captcha container - single adaptive display area
+        captcha_container = QVBoxLayout()
+        captcha_container.setSpacing(6)
 
         image_label = QLabel(self)
         image_label.setAlignment(Qt.AlignCenter)
-        image_label.setMinimumHeight(140)
-        image_label.setMaximumHeight(200)
+        image_label.setMinimumHeight(100)
         image_data_uri = str(payload.get("verificationImageDataUri") or "")
         pixmap = self._pixmap_from_data_uri(image_data_uri)
+        captcha_rendered = False
+        fallback_html = ""
+
         if not pixmap.isNull():
+            # Render captcha (QSvgRenderer handles SVG, QPixmap handles PNG/JPEG)
             image_label.setPixmap(
                 pixmap.scaled(480, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
+            image_label.setStyleSheet(f"border: 1px solid {LINE_SOFT}; border-radius: 8px; padding: 4px;")
+            captcha_container.addWidget(image_label)
+            captcha_rendered = True
         else:
-            image_label.setText("验证码加载失败，请点击刷新")
-            image_label.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 13px;")
-        captcha_layout.addWidget(image_label, 1)
+            logger.info("subhd.captcha.render.fail reason=no_usable_captcha subtitle_id=%s", subtitle_id)
 
+        # Refresh button row
+        refresh_row = QHBoxLayout()
+        refresh_row.addStretch(1)
         refresh_btn = TransparentToolButton(FIF.SYNC, self)
         refresh_btn.setFixedSize(36, 36)
         refresh_btn.setToolTip("刷新验证码")
         refresh_btn.clicked.connect(self._on_captcha_refresh)
-        captcha_layout.addWidget(refresh_btn, 0, Qt.AlignVCenter)
-        root.addWidget(captcha_frame)
+        refresh_row.addWidget(refresh_btn)
+        captcha_container.addLayout(refresh_row)
 
-        svg_data = str(payload.get("verificationImageDataUri") or "")
-        svg_label = QLabel(self)
-        svg_label.setVisible(False)
-        if svg_data and "svg" in svg_data.lower():
-            try:
-                svg_content = base64.b64decode(svg_data.split(",", 1)[1]).decode("utf-8")
-                if svg_content.strip().startswith("<svg"):
-                    svg_label.setTextFormat(Qt.RichText)
-                    svg_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                    svg_label.setStyleSheet(f"background: white; border: 1px solid {LINE_SOFT}; border-radius: 8px; padding: 12px;")
-                    svg_label.setMinimumHeight(140)
-                    svg_label.setMaximumHeight(200)
-                    svg_label.setAlignment(Qt.AlignCenter)
-                    svg_label.setText(svg_content)
-                    svg_label.setVisible(True)
-                    root.addWidget(svg_label)
-            except Exception:
-                pass
+        if not captcha_rendered:
+            verification_html = str(payload.get("verificationHtml") or "").strip()
+            if verification_html and len(verification_html) > 10:
+                # Only show HTML fallback when no image/SVG can be rendered
+                browser = QTextBrowser()
+                browser.setHtml(verification_html)
+                browser.setMaximumHeight(120)
+                browser.setStyleSheet(f"border: 1px solid {LINE_SOFT}; border-radius: 6px;")
+                captcha_container.addWidget(browser)
+            else:
+                fallback_label = QLabel("验证码加载失败，请点击刷新")
+                fallback_label.setAlignment(Qt.AlignCenter)
+                fallback_label.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 13px; padding: 24px; border: none;")
+                captcha_container.addWidget(fallback_label)
+
+        root.addLayout(captcha_container)
 
         ocr_label = CaptionLabel("")
         suggested_code = str(payload.get("suggestedCode") or "").strip()
@@ -1718,15 +1735,13 @@ class MainWindow(FluentWindow):
             code_input.setText(suggested_code)
         code_input.setPlaceholderText("请输入验证码")
         code_input.setFixedHeight(40)
-        code_input.setStyleSheet("font-size: 16px; border-radius: 8px;")
+        code_input.setStyleSheet(
+            "font-size: 16px; border-radius: 8px; border: 1px solid #d0d0d0; "
+            "background: #ffffff; padding: 4px 12px; "
+            "selection-background-color: #4a90d9;"
+        )
+        code_input.setFocus()
         root.addWidget(code_input)
-
-        verification_html = str(payload.get("verificationHtml") or "").strip()
-        if verification_html and len(verification_html) > 10:
-            browser = QTextBrowser()
-            browser.setHtml(verification_html)
-            browser.setMaximumHeight(120)
-            root.addWidget(browser)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
@@ -1746,35 +1761,52 @@ class MainWindow(FluentWindow):
 
         self._verification_dialog = dialog
         self._verification_image_label = image_label
-        self._verification_svg_label = svg_label if svg_label.isVisible() else None
+        self._verification_refresh_btn = refresh_btn
         self._verification_code_input = code_input
         self._verification_ocr_label = ocr_label
 
         submit.clicked.connect(dialog.accept)
         cancel.clicked.connect(dialog.reject)
         accepted = dialog.exec() == QDialog.Accepted
+
+        # Log dialog result
+        user_input = code_input.text().strip() if accepted else ""
+        if accepted and user_input:
+            suggested = str(payload.get("suggestedCode") or "").strip()
+            logger.info(
+                "subhd.captcha.dialog.submit subtitle_id=%s user_code=%s ocr_suggested=%s",
+                provider_subtitle_id, user_input, suggested,
+            )
+        elif accepted:
+            logger.info("subhd.captcha.dialog.submit subtitle_id=%s user_code=(empty)", provider_subtitle_id)
+        else:
+            logger.info("subhd.captcha.dialog.skip subtitle_id=%s", provider_subtitle_id)
+
         self._verification_dialog = None
         self._verification_image_label = None
-        self._verification_svg_label = None
+        self._verification_refresh_btn = None
         self._verification_code_input = None
         self._verification_ocr_label = None
         if self.collector_worker:
             self.collector_worker.submit_verification(code_input.text().strip() if accepted else "")
 
     def _on_captcha_refresh(self) -> None:
+        logger.info("subhd.captcha.dialog.refresh")
+        if self._verification_code_input:
+            self._verification_code_input.clear()
+            self._verification_code_input.setPlaceholderText("刷新中，请稍候...")
+        if self._verification_refresh_btn:
+            self._verification_refresh_btn.setEnabled(False)
+        if self._verification_ocr_label:
+            self._verification_ocr_label.setText("正在刷新验证码...")
+            self._verification_ocr_label.setStyleSheet("color: #666; font-size: 12px;")
         if self.collector_worker:
             self.collector_worker.request_captcha_refresh()
 
     def _update_verification_dialog(self, payload: dict) -> None:
-        if self._verification_svg_label:
-            svg_data = str(payload.get("verificationImageDataUri") or "")
-            if svg_data and "svg" in svg_data.lower():
-                try:
-                    svg_content = base64.b64decode(svg_data.split(",", 1)[1]).decode("utf-8")
-                    if svg_content.strip().startswith("<svg"):
-                        self._verification_svg_label.setText(svg_content)
-                except Exception:
-                    pass
+        subtitle_id = str(payload.get("providerSubtitleId") or "").strip()
+        logger.info("subhd.captcha.dialog.update subtitle_id=%s", subtitle_id)
+        # Always render via pixmap (QSvgRenderer handles SVG, QPixmap handles images)
         if self._verification_image_label:
             image_data_uri = str(payload.get("verificationImageDataUri") or "")
             pixmap = self._pixmap_from_data_uri(image_data_uri)
@@ -1782,7 +1814,11 @@ class MainWindow(FluentWindow):
                 self._verification_image_label.setPixmap(
                     pixmap.scaled(480, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 )
+        # Restore refresh button
+        if self._verification_refresh_btn:
+            self._verification_refresh_btn.setEnabled(True)
         if self._verification_code_input:
+            self._verification_code_input.setPlaceholderText("请输入验证码")
             suggested_code = str(payload.get("suggestedCode") or "").strip()
             if suggested_code:
                 self._verification_code_input.setText(suggested_code)
@@ -1793,7 +1829,7 @@ class MainWindow(FluentWindow):
             if suggested_code:
                 confidence = float(payload.get("suggestedConfidence") or 0)
                 self._verification_ocr_label.setText(f"OCR: {suggested_code} ({confidence:.0%})")
-                self._verification_ocr_label.setStyleSheet("")
+                self._verification_ocr_label.setStyleSheet("font-size: 12px;")
             else:
                 localized_msg = self._localize_ocr_message(str(payload.get("ocrMessage") or ""))
                 if localized_msg:
@@ -1801,7 +1837,7 @@ class MainWindow(FluentWindow):
                     self._verification_ocr_label.setStyleSheet("color: #ff6b6b; font-size: 12px;")
                 else:
                     self._verification_ocr_label.setText("")
-                    self._verification_ocr_label.setStyleSheet("")
+                    self._verification_ocr_label.setStyleSheet("font-size: 12px;")
 
     def collection_finished(self, result: dict) -> None:
         self.start_button.setEnabled(True)

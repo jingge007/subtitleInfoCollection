@@ -11,7 +11,7 @@ from ..models import (
     format_chinese_description,
 )
 from ..engines.subtitle_engine import detect_subtitle_format
-from .base import DownloadContext, ProviderHealth
+from .base import DownloadContext, LogCallback, ProviderHealth
 
 
 class OpenSubtitlesProvider:
@@ -26,6 +26,7 @@ class OpenSubtitlesProvider:
         base_url: str = "https://api.opensubtitles.com/api/v1",
         user_agent: str = "subtitleInfoCollection v0.1",
         timeout: float = 30,
+        proxy: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.username = username
@@ -33,6 +34,7 @@ class OpenSubtitlesProvider:
         self.base_url = base_url.rstrip("/")
         self.user_agent = user_agent
         self.timeout = timeout
+        self.proxy = proxy
         self._token = ""
 
     async def health(self) -> ProviderHealth:
@@ -143,11 +145,19 @@ class OpenSubtitlesProvider:
                 self.id,
             ) from exc
 
-    async def search(self, movie: MovieInfo) -> list[SubtitleCandidate]:
+    async def search(
+        self,
+        movie: MovieInfo,
+        log: LogCallback | None = None,
+    ) -> list[SubtitleCandidate]:
         if not self.api_key:
             return []
         params = self._search_params(movie)
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            proxy=self.proxy,
+        ) as client:
             response = await client.get(
                 f"{self.base_url}/subtitles",
                 params=params,
@@ -195,7 +205,11 @@ class OpenSubtitlesProvider:
         candidate: SubtitleCandidate,
         context: DownloadContext,
     ) -> list[DownloadedPayload]:
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            proxy=self.proxy,
+        ) as client:
             await self._ensure_login(client)
             file_id = candidate.raw.get("attributes", {}).get("files", [{}])[0].get("file_id")
             if not file_id:

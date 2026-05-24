@@ -11,6 +11,16 @@ RequestVerificationCallback = Callable[[VerificationRequest], Awaitable[Verifica
 LogCallback = Callable[[str], None]
 
 
+def proxy_from_mapping(proxies: dict[str, str] | None = None) -> str | None:
+    """Return the best single proxy URL for httpx 0.28 clients."""
+    proxies = proxies or {}
+    return (
+        str(proxies.get("https://") or "").strip()
+        or str(proxies.get("http://") or "").strip()
+        or None
+    )
+
+
 @dataclass(slots=True)
 class ProviderHealth:
     """字幕源健康状态数据类"""
@@ -49,7 +59,11 @@ class ProviderAdapter(Protocol):
         """检查字幕源健康状态"""
         ...
 
-    async def search(self, movie: MovieInfo) -> list[SubtitleCandidate]:
+    async def search(
+        self,
+        movie: MovieInfo,
+        log: LogCallback | None = None,
+    ) -> list[SubtitleCandidate]:
         """搜索字幕候选"""
         ...
 

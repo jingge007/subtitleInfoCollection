@@ -276,7 +276,10 @@ TRADITIONAL_TO_SIMPLIFIED_MAP = {
 TRADITIONAL_ONLY_CHARS = frozenset(TRADITIONAL_TO_SIMPLIFIED_MAP.keys())
 
 SUPPORTED_FORMATS = {"ass", "srt"}
-MIN_VALID_SUBTITLE_BYTES = 100 * 1024
+# 最小有效文件大小（仅作极端兜底，优先使用结构校验）
+MIN_VALID_SUBTITLE_BYTES = 10 * 1024
+# 最小有效字幕条目数：低于此值视为无效电影字幕
+MIN_VALID_SUBTITLE_ENTRIES = 5
 DEFAULT_MIN_BILINGUAL_RATIO = 0.70
 TEXT_DECODE_ENCODINGS = ["utf-8-sig", "utf-8", "gb18030", "gbk"]
 UTF16_DECODE_ENCODINGS = ["utf-16", "utf-16le", "utf-16be"]
@@ -819,18 +822,7 @@ def validate_downloaded_subtitle_bytes(
             min_bilingual_ratio=required_ratio,
         )
 
-    if len(data) < MIN_VALID_SUBTITLE_BYTES:
-        return DownloadValidation(
-            valid=False,
-            error_type=ErrorType.CONTENT_VALIDATION_FAILED,
-            reason=(
-                "字幕文件小于 100KB，判定为无效电影字幕"
-                f"（当前 {len(data) / 1024:.1f} KB）"
-            ),
-            subtitle_format=normalized_format,
-            min_bilingual_ratio=required_ratio,
-        )
-
+    # 结构校验优先：先解析字幕条目，用条目数判断有效性
     decoded = decode_subtitle_bytes(data)
     max_replacements = 20 if lenient else 5
     min_score = -500 if lenient else -100
@@ -862,6 +854,45 @@ def validate_downloaded_subtitle_bytes(
     entry_count = bilingual_count + chinese_only_count + english_only_count
     bilingual_ratio = bilingual_count / entry_count if entry_count else 0.0
 
+    # 结构校验：条目数不足视为无效
+    if entry_count < MIN_VALID_SUBTITLE_ENTRIES:
+        # 额外检查文件大小作为兜底（仅当文件极其小时才用大小判定）
+        if len(data) < MIN_VALID_SUBTITLE_BYTES:
+            return DownloadValidation(
+                valid=False,
+                error_type=ErrorType.CONTENT_VALIDATION_FAILED,
+                reason=(
+                    "字幕条目过少且文件过小，判定为无效电影字幕"
+                    f"（条目数 {entry_count}，文件大小 {len(data) / 1024:.1f} KB）"
+                ),
+                subtitle_format=normalized_format,
+                encoding=decoded.encoding,
+                content=decoded.content,
+                entry_count=entry_count,
+                bilingual_count=bilingual_count,
+                chinese_only_count=chinese_only_count,
+                english_only_count=english_only_count,
+                bilingual_ratio=bilingual_ratio,
+                min_bilingual_ratio=required_ratio,
+            )
+        return DownloadValidation(
+            valid=False,
+            error_type=ErrorType.CONTENT_VALIDATION_FAILED,
+            reason=(
+                "字幕条目过少，判定为无效电影字幕"
+                f"（条目数 {entry_count}，文件大小 {len(data) / 1024:.1f} KB）"
+            ),
+            subtitle_format=normalized_format,
+            encoding=decoded.encoding,
+            content=decoded.content,
+            entry_count=entry_count,
+            bilingual_count=bilingual_count,
+            chinese_only_count=chinese_only_count,
+            english_only_count=english_only_count,
+            bilingual_ratio=bilingual_ratio,
+            min_bilingual_ratio=required_ratio,
+        )
+
     if entry_count > 0 and bilingual_ratio >= required_ratio:
         return DownloadValidation(
             valid=True,
@@ -890,6 +921,27 @@ def validate_downloaded_subtitle_bytes(
             min_bilingual_ratio=required_ratio,
         )
 
+    # 英文-only 检测：中文条目占比过低 -> 拒绝保存
+    if bilingual_count == 0 and chinese_only_count == 0 and english_only_count > 0:
+        return DownloadValidation(
+            valid=False,
+            error_type=ErrorType.CONTENT_VALIDATION_FAILED,
+            reason=(
+                "该字幕为纯英文，非简体中英双语字幕"
+                f"（有效条目 {entry_count}，英文 {english_only_count}，"
+                f"文件大小 {len(data) / 1024:.1f} KB）"
+            ),
+            subtitle_format=normalized_format,
+            encoding=decoded.encoding,
+            content=decoded.content,
+            entry_count=entry_count,
+            bilingual_count=bilingual_count,
+            chinese_only_count=chinese_only_count,
+            english_only_count=english_only_count,
+            bilingual_ratio=bilingual_ratio,
+            min_bilingual_ratio=required_ratio,
+        )
+
     return DownloadValidation(
         valid=False,
         error_type=ErrorType.CONTENT_VALIDATION_FAILED,
@@ -897,7 +949,8 @@ def validate_downloaded_subtitle_bytes(
             f"双语条目占比 {_format_percent(bilingual_ratio)}，"
             f"低于配置阈值 {_format_percent(required_ratio)}"
             f"（有效条目 {entry_count}，双语 {bilingual_count}，"
-            f"中文-only {chinese_only_count}，英文-only {english_only_count}）"
+            f"中文-only {chinese_only_count}，英文-only {english_only_count}，"
+            f"文件大小 {len(data) / 1024:.1f} KB）"
         ),
         subtitle_format=normalized_format,
         encoding=decoded.encoding,

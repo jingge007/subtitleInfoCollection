@@ -1,4 +1,5 @@
 import base64
+import base64
 import json
 
 import httpx
@@ -162,6 +163,71 @@ def test_parse_search_results_keeps_only_preferred_subhd_candidates():
     assert items[0].subtitle_format == "ass"
     assert items[0].download_count == 136
     assert items[0].raw["fileSizeKB"] == 243
+
+
+def test_extract_d_page_ids_accepts_search_result_links():
+    provider = SubhdProvider()
+    html = """
+    <a href="/d/12345">电影详情</a>
+    <a href='/d/abcDEF'>动态详情</a>
+    <a class="x" href="/d/12345?from=search">重复详情</a>
+    <a href="/a/ABCD12">字幕详情</a>
+    """
+
+    assert provider._extract_d_page_ids(html) == ["12345", "abcDEF"]
+
+
+@pytest.mark.asyncio
+async def test_search_writes_structured_events_to_gui_log(monkeypatch):
+    provider = SubhdProvider()
+    movie = MovieInfo(movie_id="tmdb-278", title="The Shawshank Redemption", title_zh="肖申克的救赎", year=1994)
+    logs: list[str] = []
+
+    async def no_httpx(movie_arg, keywords_arg):
+        return []
+
+    async def no_playwright(movie_arg, keywords_arg):
+        return []
+
+    monkeypatch.setattr(provider, "_search_via_httpx", no_httpx)
+    monkeypatch.setattr(provider, "_search_via_playwright", no_playwright)
+
+    result = await provider.search(movie, log=logs.append)
+
+    assert result == []
+    assert any("subhd.search.start" in item and "开始搜索" in item for item in logs)
+    assert any("subhd.search.done" in item and "候选总数=0" in item for item in logs)
+
+
+@pytest.mark.asyncio
+async def test_d_page_parser_uses_playwright_when_httpx_page_has_no_static_a(monkeypatch):
+    provider = SubhdProvider()
+    movie = MovieInfo(movie_id="tmdb-13466", title="October Sky", title_zh="十月的天空", year=1999)
+
+    class Client:
+        async def get(self, url):
+            return httpx.Response(200, text="<html><body>字幕列表由 JS 动态加载</body></html>")
+
+    async def rendered_page(base_url: str, d_id: str) -> str:
+        assert d_id == "777"
+        return """
+        <article class="bg-white shadow-sm rounded-3">
+          <a href="/a/UKDipL">十月的天空 October.Sky.1999.Bluray.1080p.DTS-HD.x264-Grym</a>
+          <span>转载精修 双语 简体 英语 SRT ASS 212k 34</span>
+        </article>
+        """
+
+    monkeypatch.setattr(provider, "_fetch_d_page_via_playwright", rendered_page)
+
+    items = await provider._parse_search_results_via_d_pages(
+        Client(),
+        ["777"],
+        movie,
+        ["十月的天空"],
+        "https://subhd.tv",
+    )
+
+    assert [item.provider_subtitle_id for item in items] == ["UKDipL"]
 
 
 def test_extract_result_title_removes_subhd_table_labels():

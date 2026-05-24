@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from urllib.parse import urljoin
 
 import httpx
@@ -15,7 +16,17 @@ from ..models import (
     format_chinese_description,
 )
 from .base import DownloadContext, ProviderHealth
+from .base import LogCallback
 
+logger = logging.getLogger(__name__)
+
+_TRANSIENT_HTTPX_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+    httpx.NetworkError,
+)
 
 class AssrtProvider:
     id = "assrt"
@@ -27,11 +38,15 @@ class AssrtProvider:
         base_url: str = "https://api.assrt.net/v1",
         request_interval_ms: int = 13_000,
         timeout: float = 30,
+        proxy: str | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.token = token
         self.base_url = base_url.rstrip("/")
         self.request_interval_ms = request_interval_ms
         self.timeout = timeout
+        self.proxy = proxy
+        self.transport = transport
         self._last_request = 0.0
 
     async def health(self) -> ProviderHealth:
@@ -54,33 +69,118 @@ class AssrtProvider:
         values = [movie.title_zh, movie.title, movie.original_title]
         return list(dict.fromkeys([value for value in values if value and len(value.strip()) >= 2]))
 
-    async def _request_json(self, endpoint: str, params: dict[str, object]) -> dict:
+    def _emit(
+        self,
+        event: str,
+        message: str,
+        log: LogCallback | None = None,
+        **fields: object,
+    ) -> None:
+        detail = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+        line = f"{event} {message}" + (f" {detail}" if detail else "")
+        logger.info(line)
+        if log:
+            log(line)
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            proxy=self.proxy,
+            transport=self.transport,
+        )
+
+    async def _request_json(
+        self,
+        endpoint: str,
+        params: dict[str, object],
+        log: LogCallback | None = None,
+        stage: str = "assrt.request",
+    ) -> dict:
         await self._rate_limit()
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            response = await client.get(
-                f"{self.base_url}{endpoint}",
-                params={"token": self.token, **params},
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "subtitleInfoCollection/0.1",
-                },
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                async with self._client() as client:
+                    response = await client.get(
+                        f"{self.base_url}{endpoint}",
+                        params={"token": self.token, **params},
+                        headers={
+                            "Accept": "application/json",
+                            "User-Agent": "subtitleInfoCollection/0.1",
+                        },
+                    )
+                    if response.status_code in {429, 509}:
+                        raise CollectorError(f"HTTP {response.status_code}", ErrorType.RATE_LIMITED, self.id)
+                    response.raise_for_status()
+                    payload = response.json()
+                    break
+            except _TRANSIENT_HTTPX_ERRORS as exc:
+                last_exc = exc
+                error_text = str(exc) or repr(exc)
+                if attempt >= 3:
+                    self._emit(
+                        f"{stage}.fail",
+                        "ASSRT 请求网络异常，已停止重试",
+                        log,
+                        endpoint=endpoint,
+                        attempt=attempt,
+                        error_type=type(exc).__name__,
+                        error=error_text,
+                    )
+                    raise CollectorError(
+                        f"{type(exc).__name__}: {error_text}",
+                        ErrorType.NETWORK_UNREACHABLE,
+                        self.id,
+                    ) from exc
+                self._emit(
+                    f"{stage}.retry",
+                    "ASSRT 请求网络异常，准备重试",
+                    log,
+                    endpoint=endpoint,
+                    attempt=attempt,
+                    error_type=type(exc).__name__,
+                    error=error_text,
+                )
+                await asyncio.sleep(0.2 * attempt)
+            except httpx.HTTPError as exc:
+                error_text = str(exc) or repr(exc)
+                raise CollectorError(
+                    f"{type(exc).__name__}: {error_text}",
+                    ErrorType.NETWORK_UNREACHABLE,
+                    self.id,
+                ) from exc
+        else:
+            raise CollectorError(
+                f"ASSRT 请求失败：{last_exc!r}",
+                ErrorType.NETWORK_UNREACHABLE,
+                self.id,
             )
-            if response.status_code in {429, 509}:
-                raise CollectorError(f"HTTP {response.status_code}", ErrorType.RATE_LIMITED, self.id)
-            response.raise_for_status()
-            payload = response.json()
         if payload.get("status") not in (None, 0):
             raise CollectorError(str(payload.get("error") or payload), ErrorType.PARSE_FAILED, self.id)
         return payload
 
-    async def search(self, movie: MovieInfo) -> list[SubtitleCandidate]:
+    async def search(
+        self,
+        movie: MovieInfo,
+        log: LogCallback | None = None,
+    ) -> list[SubtitleCandidate]:
         if not self.token:
             return []
         result: list[SubtitleCandidate] = []
         for keyword in self._keywords(movie):
+            self._emit(
+                "assrt.search.keyword.try",
+                "ASSRT 尝试关键词搜索",
+                log,
+                keyword=keyword,
+                base_url=self.base_url,
+            )
             payload = await self._request_json(
                 "/sub/search",
                 {"q": keyword, "cnt": 15, "pos": 0, "filelist": 1},
+                log=log,
+                stage="assrt.search",
             )
             subs = payload.get("sub", {}).get("subs") or []
             mapped = [self._map_item(raw, movie, keyword) for raw in subs]
@@ -139,7 +239,19 @@ class AssrtProvider:
     async def download(self, candidate: SubtitleCandidate, context: DownloadContext) -> list[DownloadedPayload]:
         if not self.token:
             raise CollectorError("缺少 ASSRT_TOKEN", ErrorType.PROVIDER_DISABLED, self.id)
-        detail = await self._request_json("/sub/detail", {"id": candidate.provider_subtitle_id})
+        self._emit(
+            "assrt.download.start",
+            "ASSRT 开始下载字幕",
+            log=context.log,
+            subtitle_id=candidate.provider_subtitle_id,
+            title=candidate.subtitle_title,
+        )
+        detail = await self._request_json(
+            "/sub/detail",
+            {"id": candidate.provider_subtitle_id},
+            log=context.log,
+            stage="assrt.download.detail",
+        )
         subs = detail.get("sub", {}).get("subs") or []
         if not subs:
             raise CollectorError("ASSRT 明细接口没有返回字幕信息", ErrorType.DOWNLOAD_FAILED, self.id)
@@ -157,22 +269,84 @@ class AssrtProvider:
         if not download_url:
             raise CollectorError("ASSRT 明细接口没有返回下载链接", ErrorType.DOWNLOAD_FAILED, self.id)
 
-        await self._rate_limit()
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            response = await client.get(
-                urljoin(self.base_url, download_url),
-                headers={
-                    "Accept": "application/zip,application/octet-stream,text/plain,*/*",
-                    "User-Agent": "subtitleInfoCollection/0.1",
-                    "Referer": "https://assrt.net/",
-                },
-            )
-            response.raise_for_status()
-            return [
-                DownloadedPayload(
-                    file_name=file_name,
-                    content=response.content,
-                    source_url=str(response.url),
-                    content_type=response.headers.get("content-type", ""),
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                await self._rate_limit()
+                async with self._client() as client:
+                    full_url = urljoin(self.base_url, download_url)
+                    response = await client.get(
+                        full_url,
+                        headers={
+                            "Accept": "application/zip,application/octet-stream,text/plain,*/*",
+                            "User-Agent": "subtitleInfoCollection/0.1",
+                            "Referer": "https://assrt.net/",
+                        },
+                    )
+                    if response.status_code in {429, 509}:
+                        raise CollectorError(
+                            f"HTTP {response.status_code}",
+                            ErrorType.RATE_LIMITED,
+                            self.id,
+                        )
+                    response.raise_for_status()
+                    self._emit(
+                        "assrt.download.success",
+                        "ASSRT 字幕下载成功",
+                        log=context.log,
+                        subtitle_id=candidate.provider_subtitle_id,
+                        size=str(len(response.content)),
+                        file=file_name,
+                    )
+                    return [
+                        DownloadedPayload(
+                            file_name=file_name,
+                            content=response.content,
+                            source_url=str(response.url),
+                            content_type=response.headers.get("content-type", ""),
+                        )
+                    ]
+            except _TRANSIENT_HTTPX_ERRORS as exc:
+                last_exc = exc
+                error_text = str(exc) or repr(exc)
+                if attempt >= 3:
+                    self._emit(
+                        "assrt.download.fail",
+                        "ASSRT 下载文件网络异常，已停止重试",
+                        log=context.log,
+                        subtitle_id=candidate.provider_subtitle_id,
+                        base_url=self.base_url,
+                        endpoint=download_url,
+                        attempt=str(attempt),
+                        error_type=type(exc).__name__,
+                        error=error_text,
+                    )
+                    raise CollectorError(
+                        f"{type(exc).__name__}: {error_text}",
+                        ErrorType.NETWORK_UNREACHABLE,
+                        self.id,
+                    ) from exc
+                self._emit(
+                    "assrt.download.retry",
+                    "ASSRT 下载文件网络异常，准备重试",
+                    log=context.log,
+                    subtitle_id=candidate.provider_subtitle_id,
+                    base_url=self.base_url,
+                    endpoint=download_url,
+                    attempt=str(attempt),
+                    error_type=type(exc).__name__,
+                    error=error_text,
                 )
-            ]
+                await asyncio.sleep(0.2 * attempt)
+            except httpx.HTTPError as exc:
+                error_text = str(exc) or repr(exc)
+                raise CollectorError(
+                    f"{type(exc).__name__}: {error_text}",
+                    ErrorType.NETWORK_UNREACHABLE,
+                    self.id,
+                ) from exc
+        raise CollectorError(
+            f"ASSRT 下载失败: {last_exc!r}",
+            ErrorType.NETWORK_UNREACHABLE,
+            self.id,
+        )

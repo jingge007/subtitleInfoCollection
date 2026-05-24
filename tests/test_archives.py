@@ -52,7 +52,7 @@ def test_save_downloaded_payloads_rejects_zip_with_small_real_subtitle(tmp_path)
         content=make_zip_payload("small.srt", make_srt_bytes(1)),
     )
 
-    with pytest.raises(CollectorError, match="小于 100KB"):
+    with pytest.raises(CollectorError, match="无效的电影字幕"):
         save_downloaded_payloads([payload], tmp_path, "Example Movie", make_candidate())
 
 

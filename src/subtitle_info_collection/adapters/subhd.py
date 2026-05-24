@@ -664,6 +664,7 @@ class SubhdProvider:
                 continue
 
     async def download(self, candidate: SubtitleCandidate, context: DownloadContext) -> list[DownloadedPayload]:
+        self._active_log = context.log
         detail_url = candidate.detail_url or f"{self.base_urls[0]}/a/{candidate.provider_subtitle_id}"
         original_base = detail_url.split("/a/")[0]
         tried_bases = {original_base}
@@ -740,16 +741,23 @@ class SubhdProvider:
                 return None
 
             if data.get("success") and data.get("pass") is False:
-                logger.info("SubHD 需要输入验证码 (第 %d 次尝试)", attempt + 1)
-                captcha_code = await self._handle_captcha(client, base_url, candidate, context, data)
+                # OCR auto-retry: if last auto-submit failed, refresh once before re-prompting
+                if getattr(self, "_ocr_auto_submitted", False):
+                    self._ocr_auto_submitted = False
+                    self._emit("subhd.captcha.auto_retry", "SubHD OCR auto-submit failed, auto-refreshing", log=context.log, subtitle_id=candidate.provider_subtitle_id)
+                    captcha_code = _CAPTCHA_REFRESH
+                else:
+                    captcha_code = await self._handle_captcha(client, base_url, candidate, context, data)
                 if captcha_code == _CAPTCHA_REFRESH:
-                    logger.info("SubHD 验证码刷新请求")
+                    self._emit("subhd.captcha.refresh", "SubHD captcha refresh", log=context.log, subtitle_id=candidate.provider_subtitle_id, attempt=str(attempt + 1))
                     captcha_code = ""
+                    self._ocr_auto_submitted = False
                     continue
                 if not captcha_code:
-                    logger.info("SubHD 验证码输入为空，取消下载")
+                    self._emit("subhd.captcha.empty_cancel", "SubHD captcha cancelled", log=context.log, subtitle_id=candidate.provider_subtitle_id)
                     return None
-                logger.info("SubHD 提交验证码: %s (第 %d 次尝试)", captcha_code, attempt + 1)
+                masked = captcha_code[0] + "*" * (len(captcha_code) - 1) if len(captcha_code) > 1 else captcha_code
+                self._emit("subhd.captcha.api_submit", "SubHD captcha submitted", log=context.log, subtitle_id=candidate.provider_subtitle_id, code_masked=masked, attempt=str(attempt + 1))
                 continue
 
             if data.get("success") and data.get("url"):
@@ -866,7 +874,7 @@ class SubhdProvider:
             logger.info("SubHD 验证码 OCR 识别开始")
             try:
                 from ..engines.captcha_solver import solve_captcha_data_uri
-                ocr_result = solve_captcha_data_uri(image_data_uri)
+                ocr_result = solve_captcha_data_uri(image_data_uri, subhd_mode=True)
                 if ocr_result and ocr_result.text:
                     suggested_code = ocr_result.text
                     suggested_confidence = ocr_result.confidence or 0.0

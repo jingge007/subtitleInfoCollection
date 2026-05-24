@@ -117,7 +117,18 @@ def test_validate_downloaded_subtitle_bytes_rejects_small_movie_subtitle_file():
     validation = validate_downloaded_subtitle_bytes(data, "srt", "demo.srt")
     assert not validation.valid
     assert validation.error_type == "CONTENT_VALIDATION_FAILED"
-    assert "小于 100KB" in validation.reason
+    assert "有效条目过少" in validation.reason
+
+
+def test_validate_downloaded_subtitle_bytes_accepts_structured_movie_subtitle_under_100kb():
+    data = make_srt_bytes(1600)
+    assert len(data) < 100 * 1024
+
+    validation = validate_downloaded_subtitle_bytes(data, "srt", "demo.srt")
+
+    assert validation.valid
+    assert validation.entry_count == 1600
+    assert validation.bilingual_ratio == 1.0
 
 
 def test_validate_downloaded_subtitle_bytes_requires_bilingual_content():
@@ -181,7 +192,7 @@ def test_validate_downloaded_subtitle_bytes_rejects_english_only_content():
     )
     assert not validation.valid
     assert validation.error_type == "CONTENT_VALIDATION_FAILED"
-    assert "英文-only 4000" in validation.reason
+    assert "纯英文" in validation.reason and "4000" in validation.reason
 
 
 def test_validate_downloaded_subtitle_bytes_checks_ass_bilingual_ratio():

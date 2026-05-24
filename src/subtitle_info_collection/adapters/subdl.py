@@ -15,7 +15,7 @@ from ..models import (
     chinese_language_label,
     format_chinese_description,
 )
-from .base import DownloadContext, ProviderHealth
+from .base import DownloadContext, LogCallback, ProviderHealth
 
 
 class SubdlProvider:
@@ -30,6 +30,7 @@ class SubdlProvider:
         languages: str = "ZH,EN",
         include_traditional: bool = False,
         timeout: float = 30,
+        proxy: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -37,6 +38,7 @@ class SubdlProvider:
         self.languages = languages
         self.include_traditional = include_traditional
         self.timeout = timeout
+        self.proxy = proxy
 
     async def health(self) -> ProviderHealth:
         if not self.api_key:
@@ -89,10 +91,18 @@ class SubdlProvider:
             return str(payload.get("error") or payload.get("message") or payload)
         return str(payload)
 
-    async def search(self, movie: MovieInfo) -> list[SubtitleCandidate]:
+    async def search(
+        self,
+        movie: MovieInfo,
+        log: LogCallback | None = None,
+    ) -> list[SubtitleCandidate]:
         if not self.api_key:
             return []
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            proxy=self.proxy,
+        ) as client:
             response = await client.get(
                 f"{self.base_url}/subtitles",
                 params=self._search_params(movie),
@@ -230,7 +240,11 @@ class SubdlProvider:
         download_url = candidate.download_url or self._download_url(self._download_path(candidate.raw))
         if not download_url:
             raise CollectorError("SubDL did not return a download URL", ErrorType.DOWNLOAD_FAILED, self.id)
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            proxy=self.proxy,
+        ) as client:
             response = await client.get(
                 download_url,
                 headers={

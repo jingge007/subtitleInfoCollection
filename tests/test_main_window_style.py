@@ -1,9 +1,10 @@
+import base64
 import re
 import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea, QTableWidget, QTextEdit
+from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QPushButton, QScrollArea, QTableWidget, QTextBrowser, QTextEdit
 from qfluentwidgets import FluentWindow, SwitchButton
 
 from subtitle_info_collection.gui.main_window import (
@@ -140,6 +141,52 @@ def test_automation_log_copy_uses_timestamped_content(monkeypatch):
 
     window.copy_automation_log()
     assert QApplication.clipboard().text() == text
+
+    window.close()
+    app.quit()
+
+
+def test_captcha_dialog_uses_single_borderless_display_and_visible_input(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = _app()
+    window = MainWindow()
+    captured: dict[str, QDialog] = {}
+
+    svg = '<svg width="120" height="48"><text x="10" y="36">y0Qg</text></svg>'
+    data_uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode("ascii")
+
+    class Worker:
+        def submit_verification(self, code: str) -> None:
+            self.code = code
+
+        def request_captcha_refresh(self) -> None:
+            self.refreshed = True
+
+    def fake_exec(self):
+        captured["dialog"] = self
+        return QDialog.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", fake_exec)
+    window.collector_worker = Worker()
+
+    window.handle_verification_request(
+        {
+            "providerSubtitleId": "LK4IUp",
+            "subtitleTitle": "布朗克斯的故事 ZiMuZu字幕组 A.Bronx.Tale.1993.1080p.BluRay.X264-AMIABLE",
+            "detailUrl": "https://subhd.tv/a/LK4IUp",
+            "verificationHtml": svg,
+            "verificationImageDataUri": data_uri,
+            "suggestedCode": "",
+            "ocrMessage": "OCR returned no captcha text",
+        }
+    )
+
+    dialog = captured["dialog"]
+    assert dialog.findChildren(QTextBrowser) == []
+    assert window._verification_image_label is None
+    style = dialog.styleSheet() + "".join(child.styleSheet() for child in dialog.findChildren(QLineEdit))
+    assert "border: 1px solid" in style
+    assert "QTextBrowser" not in style
 
     window.close()
     app.quit()
