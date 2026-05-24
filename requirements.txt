@@ -11,3 +11,6 @@ beautifulsoup4>=4.12
 py7zr>=0.21
 rarfile>=4.2
 PySide6-Fluent-Widgets>=1.7
+
+# OCR 增强依赖（可选，安装后提升验证码识别率）：
+# pip install pytesseract numpy opencv-python-headless cairosvg

@@ -740,17 +740,22 @@ class SubhdProvider:
                 return None
 
             if data.get("success") and data.get("pass") is False:
-                logger.info("SubHD api/sub/down requires captcha, attempt=%d", attempt + 1)
+                logger.info("SubHD 需要输入验证码 (第 %d 次尝试)", attempt + 1)
                 captcha_code = await self._handle_captcha(client, base_url, candidate, context, data)
                 if captcha_code == _CAPTCHA_REFRESH:
+                    logger.info("SubHD 验证码刷新请求")
                     captcha_code = ""
                     continue
                 if not captcha_code:
+                    logger.info("SubHD 验证码输入为空，取消下载")
                     return None
+                logger.info("SubHD 提交验证码: %s (第 %d 次尝试)", captcha_code, attempt + 1)
                 continue
 
             if data.get("success") and data.get("url"):
                 dl_url = data["url"]
+                if captcha_code:
+                    logger.info("SubHD 验证码验证成功")
                 logger.info("SubHD api/sub/down got url: %s", dl_url)
                 try:
                     download_resp = await client.get(
@@ -786,15 +791,23 @@ class SubhdProvider:
                 )]
 
             if not data.get("success"):
-                logger.info("SubHD api/sub/down returned success=false, attempt=%d, data=%s", attempt + 1, str(data)[:200])
+                server_msg = str(data.get("msg") or str(data)[:200])
+                if self._api_response_has_captcha(data):
+                    logger.info("SubHD 验证码验证失败: %s", server_msg)
+                else:
+                    logger.info("SubHD api/sub/down 请求失败 (第 %d 次尝试): %s", attempt + 1, server_msg)
                 if not self._api_response_has_captcha(data):
                     return None
+                logger.info("SubHD 需要输入验证码 (第 %d 次尝试)", attempt + 1)
                 captcha_code = await self._handle_captcha(client, base_url, candidate, context, data)
                 if captcha_code == _CAPTCHA_REFRESH:
+                    logger.info("SubHD 验证码刷新请求")
                     captcha_code = ""
                     continue
                 if not captcha_code:
+                    logger.info("SubHD 验证码输入为空，取消下载")
                     return None
+                logger.info("SubHD 提交验证码: %s (第 %d 次尝试)", captcha_code, attempt + 1)
                 continue
 
             logger.info("SubHD api/sub/down unexpected response: %s", str(data)[:200])
@@ -850,20 +863,33 @@ class SubhdProvider:
         ocr_message = ""
 
         if context.captcha_ocr_enabled and image_data_uri:
+            logger.info("SubHD 验证码 OCR 识别开始")
             try:
                 from ..engines.captcha_solver import solve_captcha_data_uri
                 ocr_result = solve_captcha_data_uri(image_data_uri)
-                if ocr_result:
-                    suggested_code = ocr_result.text or ""
+                if ocr_result and ocr_result.text:
+                    suggested_code = ocr_result.text
                     suggested_confidence = ocr_result.confidence or 0.0
                     ocr_message = ocr_result.message or ""
+                    logger.info(
+                        "SubHD 验证码 OCR 识别结果: %s, 置信度: %.0f%%",
+                        suggested_code, suggested_confidence * 100,
+                    )
+                else:
+                    ocr_message = ocr_result.message if ocr_result else "无结果"
+                    logger.info("SubHD 验证码 OCR 识别失败: %s", ocr_message)
             except Exception as exc:
-                logger.info("SubHD OCR failed: %s", exc)
+                logger.info("SubHD 验证码 OCR 识别异常: %s", exc)
                 ocr_message = str(exc)
 
         if suggested_code and suggested_confidence >= context.captcha_auto_submit_min_confidence:
-            logger.info("SubHD OCR auto submit: code=%s, confidence=%.2f", suggested_code, suggested_confidence)
+            logger.info("SubHD 验证码自动提交: %s (置信度 %.0f%%)", suggested_code, suggested_confidence * 100)
             return suggested_code
+
+        if context.captcha_ocr_enabled and not suggested_code:
+            logger.info("SubHD 验证码等待用户手动输入 (OCR 未识别到有效内容)")
+        elif not context.captcha_ocr_enabled:
+            logger.info("SubHD 验证码等待用户手动输入 (OCR 未启用)")
 
         if not context.request_verification:
             logger.info("SubHD captcha required but no verification callback")
@@ -885,8 +911,11 @@ class SubhdProvider:
         if vr and vr.refresh:
             return _CAPTCHA_REFRESH
         if vr and vr.code:
-            return vr.code.strip()
+            user_code = vr.code.strip()
+            logger.info("SubHD 验证码用户输入: %s", user_code)
+            return user_code
 
+        logger.info("SubHD 验证码用户取消输入")
         return ""
 
     async def _fetch_captcha_from_down_page(
