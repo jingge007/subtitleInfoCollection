@@ -181,39 +181,44 @@ class SubtitleCollectionOrchestrator:
                 self.progress({"current": index, "total": len(movies), "currentMovie": movie_name})
                 self.log(f"[{datetime.now().strftime('%H:%M:%S')}] [{index}/{len(movies)}] 采集：{movie_name}")
 
-                candidates = await self._collect_movie_candidates(
-                    movie=movie,
-                    providers=active_providers,
-                    config=config,
-                    stats=provider_stats,
-                    failed_records=failed_records,
-                )
-                if not candidates:
-                    failed_records.append(
-                        FailedRecord(
-                            movie=movie,
-                            movie_name=movie_name,
-                            provider=",".join(provider.id for provider in active_providers),
-                            error_type=ErrorType.NO_MATCH,
-                            error="没有找到符合要求的双语 ass/srt 字幕候选",
+                movie_download_ok = False
+                any_candidate_found = False
+                for provider in active_providers:
+                    if provider.id in download_blocked_providers:
+                        self.log(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] "
+                            f"跳过 {provider.id}（下载额度已受限），尝试下一个字幕源"
                         )
+                        continue
+                    # 按优先级顺序只搜索当前字幕源
+                    candidates = await self._collect_movie_candidates(
+                        movie=movie,
+                        providers=[provider],
+                        config=config,
+                        stats=provider_stats,
+                        failed_records=failed_records,
                     )
-                    continue
+                    if not candidates:
+                        continue
 
-                sorted_candidates = sort_candidates(candidates)
-                best = sorted_candidates[0]
-                best_candidates.append(best)
-                all_candidates.extend(sorted_candidates)
-                self.storage and [self.storage.save_candidate(item) for item in sorted_candidates]
-                self.log(f"[{datetime.now().strftime('%H:%M:%S')}] 命中 {len(sorted_candidates)} 条，推荐：{best.provider}/{best.subtitle_title}")
+                    any_candidate_found = True
+                    sorted_candidates = sort_candidates(candidates)
+                    best = sorted_candidates[0]
+                    best_candidates.append(best)
+                    all_candidates.extend(sorted_candidates)
+                    self.storage and [self.storage.save_candidate(item) for item in sorted_candidates]
+                    self.log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 命中 {len(sorted_candidates)} 条，"
+                        f"推荐：{best.provider}/{best.subtitle_title}"
+                    )
 
-                if config.download_enabled:
+                    if not config.download_enabled:
+                        movie_download_ok = True
+                        break
+
                     max_download_attempts = 3
                     attempted_downloads = 0
-                    download_ok = False
                     for candidate_to_download in sorted_candidates:
-                        if candidate_to_download.provider in download_blocked_providers:
-                            continue
                         if attempted_downloads >= max_download_attempts:
                             break
                         attempted_downloads += 1
@@ -237,20 +242,41 @@ class SubtitleCollectionOrchestrator:
                                 f"[{datetime.now().strftime('%H:%M:%S')}] "
                                 f"{candidate_to_download.provider} 下载额度受限，本轮后续下载跳过该来源"
                             )
+                            break
                         if download_results and any(
                             r.provider_subtitle_id == candidate_to_download.provider_subtitle_id
                             for r in download_results
                         ):
-                            download_ok = True
+                            movie_download_ok = True
                             break
                         self.log(
                             f"[{datetime.now().strftime('%H:%M:%S')}] 候选 {attempted_downloads} 下载失败，"
                             f"尝试下一个候选"
                         )
-                    if not download_ok:
-                        self.log(
-                            f"[{datetime.now().strftime('%H:%M:%S')}] 所有候选字幕下载失败：{movie_name}"
+
+                    if movie_download_ok:
+                        break
+                    # 当前字幕源所有候选下载失败，尝试下一个字幕源
+                    self.log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] "
+                        f"{provider.id} 候选下载均失败，尝试下一个字幕源"
+                    )
+
+                if not any_candidate_found:
+                    failed_records.append(
+                        FailedRecord(
+                            movie=movie,
+                            movie_name=movie_name,
+                            provider=",".join(provider.id for provider in active_providers),
+                            error_type=ErrorType.NO_MATCH,
+                            error="没有找到符合要求的双语 ass/srt 字幕候选",
                         )
+                    )
+                elif not movie_download_ok and config.download_enabled:
+                    self.log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] 所有字幕源下载失败：{movie_name}"
+                    )
+
 
             result = self._build_result(
                 config=config,

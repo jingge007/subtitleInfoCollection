@@ -862,8 +862,7 @@ def validate_downloaded_subtitle_bytes(
                 valid=False,
                 error_type=ErrorType.CONTENT_VALIDATION_FAILED,
                 reason=(
-                    "字幕条目过少且文件过小，判定为无效电影字幕"
-                    f"（条目数 {entry_count}，文件大小 {len(data) / 1024:.1f} KB）"
+                    f"字幕条目过少({entry_count}条)"
                 ),
                 subtitle_format=normalized_format,
                 encoding=decoded.encoding,
@@ -879,8 +878,7 @@ def validate_downloaded_subtitle_bytes(
             valid=False,
             error_type=ErrorType.CONTENT_VALIDATION_FAILED,
             reason=(
-                "字幕条目过少，判定为无效电影字幕"
-                f"（条目数 {entry_count}，文件大小 {len(data) / 1024:.1f} KB）"
+                f"字幕条目过少({entry_count}条)"
             ),
             subtitle_format=normalized_format,
             encoding=decoded.encoding,
@@ -927,9 +925,7 @@ def validate_downloaded_subtitle_bytes(
             valid=False,
             error_type=ErrorType.CONTENT_VALIDATION_FAILED,
             reason=(
-                "该字幕为纯英文，非简体中英双语字幕"
-                f"（有效条目 {entry_count}，英文 {english_only_count}，"
-                f"文件大小 {len(data) / 1024:.1f} KB）"
+                "纯英文字幕，无双语内容"
             ),
             subtitle_format=normalized_format,
             encoding=decoded.encoding,
@@ -946,11 +942,7 @@ def validate_downloaded_subtitle_bytes(
         valid=False,
         error_type=ErrorType.CONTENT_VALIDATION_FAILED,
         reason=(
-            f"双语条目占比 {_format_percent(bilingual_ratio)}，"
-            f"低于配置阈值 {_format_percent(required_ratio)}"
-            f"（有效条目 {entry_count}，双语 {bilingual_count}，"
-            f"中文-only {chinese_only_count}，英文-only {english_only_count}，"
-            f"文件大小 {len(data) / 1024:.1f} KB）"
+            f"双语占比不足({_format_percent(bilingual_ratio)})"
         ),
         subtitle_format=normalized_format,
         encoding=decoded.encoding,

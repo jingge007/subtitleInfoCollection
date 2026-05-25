@@ -52,7 +52,7 @@ def test_save_downloaded_payloads_rejects_zip_with_small_real_subtitle(tmp_path)
         content=make_zip_payload("small.srt", make_srt_bytes(1)),
     )
 
-    with pytest.raises(CollectorError, match="无效的电影字幕"):
+    with pytest.raises(CollectorError, match="字幕条目过少"):
         save_downloaded_payloads([payload], tmp_path, "Example Movie", make_candidate())
 
 
@@ -75,7 +75,7 @@ def test_save_downloaded_payloads_rejects_zip_below_bilingual_ratio(tmp_path):
         content=make_zip_payload("mostly-cn.srt", make_mixed_srt_bytes(2070, 930)),
     )
 
-    with pytest.raises(CollectorError, match="双语条目占比 69.0%"):
+    with pytest.raises(CollectorError, match=r"双语占比不足\(69\.0%\)"):
         save_downloaded_payloads([payload], tmp_path, "Example Movie", make_candidate())
 
     assert not list(tmp_path.glob("*.srt"))

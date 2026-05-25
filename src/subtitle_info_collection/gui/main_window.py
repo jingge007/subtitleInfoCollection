@@ -769,7 +769,7 @@ class MainWindow(FluentWindow):
         row2.setSpacing(12)
         strategy_label = StrongBodyLabel("策略")
         self.fallback_check = CheckBox("源兜底", self)
-        self.fallback_check.setChecked(True)
+        self.fallback_check.setChecked(False)
         self.download_check = CheckBox("下载字幕", self)
         self.download_check.setChecked(True)
         row2.addWidget(strategy_label)
@@ -1619,6 +1619,11 @@ class MainWindow(FluentWindow):
         if self.isMinimized():
             _flash_taskbar(int(self.winId()))
 
+        subtitle_title = payload.get("subtitleTitle") or payload.get("detailUrl") or ""
+        self.append_collect_log(
+            f"[{datetime.now().strftime('%H:%M:%S')}] 验证码弹窗：{subtitle_title}，请输入验证码"
+        )
+
         if self._verification_dialog is not None:
             self._update_verification_dialog(payload)
             return
@@ -1772,14 +1777,23 @@ class MainWindow(FluentWindow):
         # Log dialog result
         user_input = code_input.text().strip() if accepted else ""
         if accepted and user_input:
+            self.append_collect_log(
+                f"[{datetime.now().strftime('%H:%M:%S')}] 验证码已提交：{user_input}"
+            )
             suggested = str(payload.get("suggestedCode") or "").strip()
             logger.info(
                 "subhd.captcha.dialog.submit subtitle_id=%s user_code=%s ocr_suggested=%s",
                 provider_subtitle_id, user_input, suggested,
             )
         elif accepted:
+            self.append_collect_log(
+                f"[{datetime.now().strftime('%H:%M:%S')}] 验证码已提交（空）"
+            )
             logger.info("subhd.captcha.dialog.submit subtitle_id=%s user_code=(empty)", provider_subtitle_id)
         else:
+            self.append_collect_log(
+                f"[{datetime.now().strftime('%H:%M:%S')}] 已跳过验证码"
+            )
             logger.info("subhd.captcha.dialog.skip subtitle_id=%s", provider_subtitle_id)
 
         self._verification_dialog = None
@@ -1791,6 +1805,9 @@ class MainWindow(FluentWindow):
             self.collector_worker.submit_verification(code_input.text().strip() if accepted else "")
 
     def _on_captcha_refresh(self) -> None:
+        self.append_collect_log(
+            f"[{datetime.now().strftime('%H:%M:%S')}] 验证码已刷新"
+        )
         logger.info("subhd.captcha.dialog.refresh")
         if self._verification_code_input:
             self._verification_code_input.clear()

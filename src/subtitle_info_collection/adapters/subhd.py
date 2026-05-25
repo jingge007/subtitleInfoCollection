@@ -6,12 +6,13 @@ import re
 from urllib.parse import quote, unquote, urljoin, urlparse
 
 import httpx
+from datetime import datetime
 
 from ..errors import CollectorError, ErrorType
 from ..engines.scorer import normalize_text
 from ..engines.subtitle_engine import detect_subtitle_format
 from ..models import DownloadedPayload, MovieInfo, SubtitleCandidate, format_chinese_description
-from .base import DownloadContext, ProviderHealth
+from .base import DownloadContext, LogCallback, ProviderHealth
 
 DEFAULT_BASE_URLS = ["https://subhd.tv", "https://subhd.cc", "https://subhd.me", "https://subhd.la"]
 
@@ -106,13 +107,21 @@ class SubhdProvider:
     id = "subhd"
     download_supported = True
 
-    def __init__(self, base_urls: list[str] | None = None, timeout: float = 30) -> None:
+    def __init__(self, base_urls: list[str] | None = None, timeout: float = 30, proxy: str | None = None) -> None:
         self.base_urls = [url.rstrip("/") for url in (base_urls or DEFAULT_BASE_URLS)]
         self.timeout = timeout
+        self.proxy = proxy
         self._shared_cookies = httpx.Cookies()
         self._browser = None
         self._browser_context = None
         self._playwright_instance = None
+
+    @staticmethod
+    def _emit(event, message, log=None, **kwargs):
+        if log:
+            log(message)
+        logger.info("subhd.%s %s", event, message)
+
 
     async def cleanup(self) -> None:
         if self._browser_context:
@@ -201,7 +210,7 @@ class SubhdProvider:
 
         return None
 
-    async def search(self, movie: MovieInfo) -> list[SubtitleCandidate]:
+    async def search(self, movie: MovieInfo, log: LogCallback | None = None) -> list[SubtitleCandidate]:
         keywords = self._keywords(movie)
         logger.info("SubHD search start, movie=%s, keywords=%s", movie.title_zh or movie.title, keywords)
 
@@ -219,6 +228,7 @@ class SubhdProvider:
             follow_redirects=True,
             headers=BROWSER_HEADERS,
             cookies=self._shared_cookies,
+            proxy=self.proxy,
         ) as client:
             for base_url in self.base_urls:
                 for keyword in keywords:
@@ -684,6 +694,7 @@ class SubhdProvider:
                     follow_redirects=True,
                     headers=BROWSER_HEADERS,
                     cookies=self._shared_cookies,
+                    proxy=self.proxy,
                 ) as client:
                     try:
                         warmup_url = f"{base_url}/search/{quote(candidate.movie_title_zh or candidate.movie_title or '')}"
@@ -869,8 +880,11 @@ class SubhdProvider:
         suggested_code = ""
         suggested_confidence = 0.0
         ocr_message = ""
+        _log = context.log
+        _emit = lambda msg: _log(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}") if _log else None
 
         if context.captcha_ocr_enabled and image_data_uri:
+            _emit("验证码 OCR 识别中...")
             logger.info("SubHD 验证码 OCR 识别开始")
             try:
                 from ..engines.captcha_solver import solve_captcha_data_uri
@@ -883,21 +897,26 @@ class SubhdProvider:
                         "SubHD 验证码 OCR 识别结果: %s, 置信度: %.0f%%",
                         suggested_code, suggested_confidence * 100,
                     )
+                    _emit(f"验证码 OCR: {suggested_code} ({suggested_confidence:.0%})")
                 else:
                     ocr_message = ocr_result.message if ocr_result else "无结果"
                     logger.info("SubHD 验证码 OCR 识别失败: %s", ocr_message)
+                    _emit(f"验证码 OCR 失败: {ocr_message}")
             except Exception as exc:
                 logger.info("SubHD 验证码 OCR 识别异常: %s", exc)
                 ocr_message = str(exc)
 
         if suggested_code and suggested_confidence >= context.captcha_auto_submit_min_confidence:
             logger.info("SubHD 验证码自动提交: %s (置信度 %.0f%%)", suggested_code, suggested_confidence * 100)
+            _emit(f"验证码自动提交: {suggested_code} (置信度:{suggested_confidence:.0%})")
             return suggested_code
 
         if context.captcha_ocr_enabled and not suggested_code:
             logger.info("SubHD 验证码等待用户手动输入 (OCR 未识别到有效内容)")
+            _emit("等待手动输入验证码...")
         elif not context.captcha_ocr_enabled:
             logger.info("SubHD 验证码等待用户手动输入 (OCR 未启用)")
+            _emit("等待手动输入验证码 (OCR未启用)...")
 
         if not context.request_verification:
             logger.info("SubHD captcha required but no verification callback")

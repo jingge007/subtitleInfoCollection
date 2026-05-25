@@ -50,7 +50,7 @@ class CollectorError(Exception):
     def __str__(self) -> str:
         prefix = f"[{self.provider}] " if self.provider else ""
         label = ERROR_TYPE_LABELS.get(self.error_type, "采集错误")
-        return f"{prefix}{label}（{self.error_type}）：{self.message}"
+        return f"{prefix}{label}：{self.message}"
 
 
 @dataclass(slots=True)

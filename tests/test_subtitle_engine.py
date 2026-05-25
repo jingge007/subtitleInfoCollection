@@ -117,7 +117,7 @@ def test_validate_downloaded_subtitle_bytes_rejects_small_movie_subtitle_file():
     validation = validate_downloaded_subtitle_bytes(data, "srt", "demo.srt")
     assert not validation.valid
     assert validation.error_type == "CONTENT_VALIDATION_FAILED"
-    assert "有效条目过少" in validation.reason
+    assert "字幕条目过少" in validation.reason
 
 
 def test_validate_downloaded_subtitle_bytes_accepts_structured_movie_subtitle_under_100kb():
@@ -143,7 +143,7 @@ def test_validate_downloaded_subtitle_bytes_requires_bilingual_content():
     invalid_validation = validate_downloaded_subtitle_bytes(invalid, "srt", "demo.srt")
     assert not invalid_validation.valid
     assert invalid_validation.error_type == "CONTENT_VALIDATION_FAILED"
-    assert "低于配置阈值 70.0%" in invalid_validation.reason
+    assert "双语占比不足" in invalid_validation.reason
 
 
 def test_validate_downloaded_subtitle_bytes_requires_default_70_percent_bilingual_ratio():
@@ -165,11 +165,9 @@ def test_validate_downloaded_subtitle_bytes_requires_default_70_percent_bilingua
     )
     assert not invalid.valid
     assert invalid.error_type == "CONTENT_VALIDATION_FAILED"
-    assert "双语条目占比 69.0%" in invalid.reason
-    assert "低于配置阈值 70.0%" in invalid.reason
-    assert "有效条目 3000" in invalid.reason
-    assert "双语 2070" in invalid.reason
-    assert "中文-only 930" in invalid.reason
+    assert "双语占比不足(69.0%)" in invalid.reason
+    assert "双语占比不足" in invalid.reason
+    assert "69.0%" in invalid.reason
 
 
 def test_validate_downloaded_subtitle_bytes_accepts_custom_bilingual_ratio():
@@ -192,7 +190,7 @@ def test_validate_downloaded_subtitle_bytes_rejects_english_only_content():
     )
     assert not validation.valid
     assert validation.error_type == "CONTENT_VALIDATION_FAILED"
-    assert "纯英文" in validation.reason and "4000" in validation.reason
+    assert "纯英文字幕" in validation.reason
 
 
 def test_validate_downloaded_subtitle_bytes_checks_ass_bilingual_ratio():
@@ -210,7 +208,7 @@ def test_validate_downloaded_subtitle_bytes_checks_ass_bilingual_ratio():
         "demo.ass",
     )
     assert not invalid.valid
-    assert "双语条目占比 65.0%" in invalid.reason
+    assert "双语占比不足(65.0%)" in invalid.reason
 
 
 def test_validate_downloaded_subtitle_bytes_lenient_still_rejects_chinese_only_content():
