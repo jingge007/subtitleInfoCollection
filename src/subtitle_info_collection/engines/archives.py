@@ -423,31 +423,3 @@ def save_downloaded_payloads(
 
     return saved
 
-def create_zip_package(files: list[Path], output_path: Path, root_dir: Path) -> Path | None:
-    """创建 ZIP 压缩包"""
-    existing = [path for path in files if path.exists() and path.is_file()]
-    if not existing:
-        return None
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        used: set[str] = set()
-        for file_path in existing:
-            try:
-                arcname = file_path.relative_to(root_dir).as_posix()
-            except ValueError:
-                arcname = file_path.name
-            base = Path(arcname)
-            candidate = arcname
-            index = 2
-            while candidate in used:
-                candidate = f"{base.stem}-{index}{base.suffix}"
-                index += 1
-            used.add(candidate)
-            archive.write(file_path, candidate)
-    return output_path
-
-
-def cleanup_empty_dir(path: Path) -> None:
-    """清理空目录"""
-    if path.exists() and path.is_dir() and not any(path.iterdir()):
-        shutil.rmtree(path, ignore_errors=True)

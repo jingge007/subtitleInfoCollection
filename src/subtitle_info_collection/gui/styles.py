@@ -189,32 +189,6 @@ NavigationTreePanel QListWidget::item:selected {{
 }}
 """
 
-
-CARD_SHADOW = f"""
-QFrame {{
-    background: {SURFACE};
-    border: 1px solid {LINE_SOFT};
-    border-radius: 10px;
-}}
-"""
-
-METRIC_CARD_STYLE = f"""
-QFrame {{
-    background: {SURFACE};
-    border: 1px solid {LINE_SOFT};
-    border-radius: 10px;
-}}
-QLabel#metricValue {{
-    font-size: 28px;
-    font-weight: 700;
-    color: {TEXT};
-}}
-QLabel#metricLabel {{
-    font-size: 12px;
-    color: {TEXT_SOFT};
-}}
-"""
-
 LOG_STYLE = f"""
 QTextEdit {{
     background: {LOG_BG};
@@ -224,13 +198,5 @@ QTextEdit {{
     font-family: "Cascadia Code", "Consolas", monospace;
     font-size: 12px;
     padding: 10px;
-}}
-"""
-
-DANGER_ZONE_STYLE = f"""
-QFrame {{
-    background: {DANGER_BG};
-    border: 1px solid {DANGER_BORDER};
-    border-radius: 10px;
 }}
 """

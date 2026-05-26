@@ -312,10 +312,6 @@ class SubtitleCollectionOrchestrator:
                         pass
 
     async def _resolve_movies(self, config: TaskConfig) -> list[MovieInfo]:
-        if config.movie_source == "manual":
-            return config.manual_movies[: config.limit]
-        if config.movie_source == "backend":
-            raise CollectorError("后端电影源已保留但未配置", ErrorType.PROVIDER_DISABLED)
         client = TmdbClient(config.tmdb_token)
         return await client.fetch_top_movies(
             config.year,

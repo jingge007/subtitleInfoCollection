@@ -339,7 +339,6 @@ class TaskConfig:
     request_interval_ms: int = 8_000  # 请求间隔（毫秒）
     vote_count_min: int = 500  # 最小投票数
     output_root: Path | None = None  # 输出根目录
-    manual_movies: list[MovieInfo] = field(default_factory=list)  # 手动指定的电影列表
     tmdb_token: str = ""  # TMDb访问令牌
     assrt_token: str = ""  # ASSRT访问令牌
     assrt_api_base_url: str = "https://api.assrt.net/v1"  # ASSRT API基础URL

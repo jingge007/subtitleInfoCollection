@@ -1,10 +1,10 @@
-ï»¿param(
+param(
   [string]$Python = "python"
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$AppName = "å­—å¹•é‡‡é›†å·¥å…·"
+$AppName = "×ÖÄ»²É¼¯¹¤¾ß"
 Set-Location $Root
 
 function Invoke-CheckedCommand {
@@ -17,7 +17,7 @@ function Invoke-CheckedCommand {
   & $CommandPath @CommandArguments
   $exitCode = $LASTEXITCODE
   if ($exitCode -ne 0) {
-    throw "å‘½ä»¤æ‰§è¡Œå¤±è´¥ï¼ˆé€€å‡ºç  $exitCodeï¼‰ï¼š$CommandPath $($CommandArguments -join ' ')"
+    throw "ÃüÁîÖ´ĞĞÊ§°Ü£¨ÍË³öÂë $exitCode£©£º$CommandPath $($CommandArguments -join ' ')"
   }
 }
 
@@ -90,33 +90,33 @@ if (!(Test-Path ".venv")) {
 Invoke-CheckedCommand ".\.venv\Scripts\python.exe" @("-m", "pip", "install", "--upgrade", "pip")
 Invoke-CheckedCommand ".\.venv\Scripts\python.exe" @("-m", "pip", "install", "-e", ".[dev]")
 
-# ä¸‹è½½å¹¶é…ç½® UPX å‹ç¼©å·¥å…·
+# ÏÂÔØ²¢ÅäÖÃ UPX Ñ¹Ëõ¹¤¾ß
 $upxUrl = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
 $upxZipPath = Join-Path $PSScriptRoot "upx.zip"
 $upxDir = Join-Path $PSScriptRoot "upx"
 $upxExePath = Join-Path $upxDir "upx.exe"
 
 if (!(Test-Path $upxExePath)) {
-    Write-Host "æ­£åœ¨ä¸‹è½½ UPX å‹ç¼©å·¥å…·..."
+    Write-Host "ÕıÔÚÏÂÔØ UPX Ñ¹Ëõ¹¤¾ß..."
     try {
         Invoke-WebRequest -Uri $upxUrl -OutFile $upxZipPath -ErrorAction Stop
         Expand-Archive -Path $upxZipPath -DestinationPath $upxDir -Force
-        # UPX è§£å‹åä¼šåœ¨å­ç›®å½•ä¸­ï¼Œæ‰¾åˆ° upx.exe å¹¶ç§»åŠ¨åˆ°ä¸Šçº§ç›®å½•
+        # UPX ½âÑ¹ºó»áÔÚ×ÓÄ¿Â¼ÖĞ£¬ÕÒµ½ upx.exe ²¢ÒÆ¶¯µ½ÉÏ¼¶Ä¿Â¼
         $upxExe = Get-ChildItem -Path $upxDir -Recurse -Filter "upx.exe" | Select-Object -First 1
         if ($upxExe) {
             Move-Item -Path $upxExe.FullName -Destination $upxExePath -Force
         }
         Remove-Item -Path $upxZipPath -Force -ErrorAction SilentlyContinue
-        Write-Host "UPX ä¸‹è½½å®Œæˆï¼š$upxExePath"
+        Write-Host "UPX ÏÂÔØÍê³É£º$upxExePath"
     } catch {
-        Write-Host "è­¦å‘Š: æ— æ³•ä¸‹è½½ UPXï¼Œå°†ä¸ä½¿ç”¨å‹ç¼©ï¼š$($_.Exception.Message)"
+        Write-Host "¾¯¸æ: ÎŞ·¨ÏÂÔØ UPX£¬½«²»Ê¹ÓÃÑ¹Ëõ£º$($_.Exception.Message)"
     }
 }
 
-# å°† UPX ç›®å½•æ·»åŠ åˆ° PATHï¼ˆå¦‚æœå¯ç”¨ï¼‰
+# ½« UPX Ä¿Â¼Ìí¼Óµ½ PATH£¨Èç¹û¿ÉÓÃ£©
 if (Test-Path $upxExePath) {
     $env:PATH = "$upxDir;$env:PATH"
-    Write-Host "å·²å¯ç”¨ UPX å‹ç¼©ï¼š$upxExePath"
+    Write-Host "ÒÑÆôÓÃ UPX Ñ¹Ëõ£º$upxExePath"
 }
 
 function Find-BrowserExecutable {
@@ -155,13 +155,13 @@ function Copy-PlaywrightBrowserCache {
     $targetPath
   )
   if (!(Test-PlaywrightBrowserCache $targetPath)) {
-    throw "å¤åˆ¶ Playwright æµè§ˆå™¨å¤±è´¥ï¼šç›®æ ‡ç›®å½•ç¼ºå°‘ chrome.exe æˆ– chrome-headless-shell.exeï¼š$targetPath"
+    throw "¸´ÖÆ Playwright ä¯ÀÀÆ÷Ê§°Ü£ºÄ¿±êÄ¿Â¼È±ÉÙ chrome.exe »ò chrome-headless-shell.exe£º$targetPath"
   }
 }
 
 $playwrightPackageDirOutput = & ".\.venv\Scripts\python.exe" -c "from pathlib import Path; import playwright; print(Path(playwright.__file__).resolve().parent)"
 if ($LASTEXITCODE -ne 0) {
-  throw "å‘½ä»¤æ‰§è¡Œå¤±è´¥ï¼ˆé€€å‡ºç  $LASTEXITCODEï¼‰ï¼š.\.venv\Scripts\python.exe -c <resolve playwright package dir>"
+  throw "ÃüÁîÖ´ĞĞÊ§°Ü£¨ÍË³öÂë $LASTEXITCODE£©£º.\.venv\Scripts\python.exe -c <resolve playwright package dir>"
 }
 $playwrightPackageDir = ($playwrightPackageDirOutput | Select-Object -Last 1).Trim()
 $playwrightLocalBrowsersPath = Join-Path $playwrightPackageDir "driver\package\.local-browsers"
@@ -174,13 +174,13 @@ if (
     [System.StringComparison]::OrdinalIgnoreCase
   )
 ) {
-  throw "Playwright æµè§ˆå™¨ç›®å½•è§£æå¼‚å¸¸ï¼š$playwrightLocalBrowsersPath"
+  throw "Playwright ä¯ÀÀÆ÷Ä¿Â¼½âÎöÒì³££º$playwrightLocalBrowsersPath"
 }
 
 $playwrightBrowserSourcePath = $defaultPlaywrightCache
 if (!(Test-PlaywrightBrowserCache $playwrightBrowserSourcePath)) {
   if (Test-PlaywrightBrowserCache $playwrightLocalBrowsersPath) {
-    Write-Host "æ£€æµ‹åˆ°åŒ…å†… Playwright æµè§ˆå™¨ç¼“å­˜ï¼Œå°†è¿ç§»åˆ°æœ¬æœºç¼“å­˜ï¼š$defaultPlaywrightCache"
+    Write-Host "¼ì²âµ½°üÄÚ Playwright ä¯ÀÀÆ÷»º´æ£¬½«Ç¨ÒÆµ½±¾»ú»º´æ£º$defaultPlaywrightCache"
     $copyScriptPath = Join-Path $PSScriptRoot "copy_playwright_browsers.ps1"
     Invoke-CheckedCommand "powershell" @(
       "-NoProfile",
@@ -207,7 +207,7 @@ if (!(Test-PlaywrightBrowserCache $playwrightBrowserSourcePath)) {
 }
 
 if (!(Test-PlaywrightBrowserCache $playwrightBrowserSourcePath)) {
-  throw "Playwright Chromium æœªå®Œæ•´å®‰è£…ï¼Œè¯·é‡æ–°è¿è¡Œæœ¬æ‰“åŒ…è„šæœ¬ã€‚"
+  throw "Playwright Chromium Î´ÍêÕû°²×°£¬ÇëÖØĞÂÔËĞĞ±¾´ò°ü½Å±¾¡£"
 }
 
 if (Test-Path $playwrightLocalBrowsersPath) {
@@ -256,7 +256,7 @@ if ($runningPackageProcesses) {
   $processSummary = ($runningPackageProcesses | ForEach-Object {
       "$($_.Name)(PID $($_.ProcessId))"
     }) -join ", "
-  throw "è¯·å…ˆå…³é—­æ­£åœ¨è¿è¡Œçš„æ—§ç‰ˆç¨‹åºæˆ–æµè§ˆå™¨å­è¿›ç¨‹ï¼›å®ƒä»¬æ­£åœ¨å ç”¨æ‰“åŒ…ç›®å½•ï¼š$packageOutputPathï¼›å ç”¨è¿›ç¨‹ï¼š$processSummary"
+  throw "ÇëÏÈ¹Ø±ÕÕıÔÚÔËĞĞµÄ¾É°æ³ÌĞò»òä¯ÀÀÆ÷×Ó½ø³Ì£»ËüÃÇÕıÔÚÕ¼ÓÃ´ò°üÄ¿Â¼£º$packageOutputPath£»Õ¼ÓÃ½ø³Ì£º$processSummary"
 }
 
 $pyinstallerArgs = @(
@@ -265,49 +265,113 @@ $pyinstallerArgs = @(
 )
 
 if (![string]::IsNullOrWhiteSpace($configuredDistPath)) {
-  Write-Host "æ£€æµ‹åˆ°è‡ªå®šä¹‰æ‰“åŒ…è¾“å‡ºç›®å½•ï¼š$packageOutputPath"
+  Write-Host "¼ì²âµ½×Ô¶¨Òå´ò°üÊä³öÄ¿Â¼£º$packageOutputPath"
   $pyinstallerArgs += "--distpath"
   $pyinstallerArgs += $resolvedDistPath
 }
 
-# ä½¿ç”¨ spec æ–‡ä»¶ï¼ˆå·²é…ç½®æ”¶é›†å’Œæ’é™¤è§„åˆ™ï¼‰
-Invoke-CheckedCommand ".\.venv\Scripts\pyinstaller.exe" ($pyinstallerArgs + @("å­—å¹•é‡‡é›†å·¥å…·.spec"))
+# Ê¹ÓÃ spec ÎÄ¼ş£¨ÒÑÅäÖÃÊÕ¼¯ºÍÅÅ³ı¹æÔò£©
+Invoke-CheckedCommand ".\.venv\Scripts\pyinstaller.exe" ($pyinstallerArgs + @("×ÖÄ»²É¼¯¹¤¾ß.spec"))
 
 Start-Sleep -Seconds 5
 Copy-PlaywrightBrowserCache $playwrightBrowserSourcePath $packageOutputPath
 
-# æ¸…ç†ä¸å¿…è¦çš„æ–‡ä»¶ä»¥å‡å°ä½“ç§¯
-Write-Host "å¼€å§‹æ¸…ç†ä¸å¿…è¦çš„æ–‡ä»¶..."
 
-# åˆ é™¤ç¿»è¯‘æ–‡ä»¶ï¼ˆ.qmï¼‰- PySide6 ç¿»è¯‘æ–‡ä»¶åœ¨è¿è¡Œæ—¶ä¸éœ€è¦
+# ¾«¼ò Playwright ä¯ÀÀÆ÷£ºÖ»±£Áô headless shell£¬É¾³ıÍêÕû Chromium ºÍ MCP Chrome
+Write-Host '¿ªÊ¼¾«¼ò Playwright ä¯ÀÀÆ÷...'
+$browsersDir = Join-Path $packageOutputPath '_internal\playwright\driver\package\.local-browsers'
+if (Test-Path $browsersDir) {
+    $chromiumDir = Join-Path $browsersDir 'chromium-1217'
+    if (Test-Path $chromiumDir) {
+        Remove-Item -LiteralPath $chromiumDir -Recurse -Force
+        Write-Host '  - ÒÑÉ¾³ıÍêÕû Chromium (chromium-1217)'
+    }
+    $mcpDirs = Get-ChildItem -Path $browsersDir -Directory -Filter 'mcp-chrome-*' -ErrorAction SilentlyContinue
+    foreach ($d in $mcpDirs) {
+        Remove-Item -LiteralPath $d.FullName -Recurse -Force
+        Write-Host "  - ÒÑÉ¾³ı MCP Chrome: $($d.Name)"
+    }
+}
+Write-Host 'Playwright ä¯ÀÀÆ÷¾«¼òÍê³É£¡'
+
+# ÇåÀí²»±ØÒªµÄÎÄ¼şÒÔ¼õĞ¡Ìå»ı
+Write-Host "¿ªÊ¼ÇåÀí²»±ØÒªµÄÎÄ¼ş..."
+
+# É¾³ı·­ÒëÎÄ¼ş£¨.qm£©- PySide6 ·­ÒëÎÄ¼şÔÚÔËĞĞÊ±²»ĞèÒª
 $qmFiles = Get-ChildItem -Path $packageOutputPath -Filter "*.qm" -Recurse -ErrorAction SilentlyContinue
 if ($qmFiles) {
     $qmFiles | Remove-Item -Force
-    Write-Host "  - å·²åˆ é™¤ $($qmFiles.Count) ä¸ªç¿»è¯‘æ–‡ä»¶ï¼ˆ.qmï¼‰"
+    Write-Host "  - ÒÑÉ¾³ı $($qmFiles.Count) ¸ö·­ÒëÎÄ¼ş£¨.qm£©"
 }
 
-# åˆ é™¤ç±»å‹æ³¨è§£æ–‡ä»¶ï¼ˆ.pyiï¼‰- è¿è¡Œæ—¶ä¸éœ€è¦
+# É¾³ıÀàĞÍ×¢½âÎÄ¼ş£¨.pyi£©- ÔËĞĞÊ±²»ĞèÒª
 $pyiFiles = Get-ChildItem -Path $packageOutputPath -Filter "*.pyi" -Recurse -ErrorAction SilentlyContinue
 if ($pyiFiles) {
     $pyiFiles | Remove-Item -Force
-    Write-Host "  - å·²åˆ é™¤ $($pyiFiles.Count) ä¸ªç±»å‹æ³¨è§£æ–‡ä»¶ï¼ˆ.pyiï¼‰"
+    Write-Host "  - ÒÑÉ¾³ı $($pyiFiles.Count) ¸öÀàĞÍ×¢½âÎÄ¼ş£¨.pyi£©"
 }
 
-# åˆ é™¤ __pycache__ ç›®å½•
+# É¾³ı __pycache__ Ä¿Â¼
 $pycacheDirs = Get-ChildItem -Path $packageOutputPath -Filter "__pycache__" -Recurse -Directory -ErrorAction SilentlyContinue
 if ($pycacheDirs) {
     $pycacheDirs | Remove-Item -Recurse -Force
-    Write-Host "  - å·²åˆ é™¤ $($pycacheDirs.Count) ä¸ª __pycache__ ç›®å½•"
+    Write-Host "  - ÒÑÉ¾³ı $($pycacheDirs.Count) ¸ö __pycache__ Ä¿Â¼"
 }
 
-# åˆ é™¤ .dist-info å’Œ .egg-info ç›®å½•ï¼ˆå…ƒæ•°æ®ä¸éœ€è¦ï¼‰
+# É¾³ı .dist-info ºÍ .egg-info Ä¿Â¼£¨ÔªÊı¾İ²»ĞèÒª£©
 $infoDirs = Get-ChildItem -Path $packageOutputPath -Filter "*.dist-info" -Recurse -Directory -ErrorAction SilentlyContinue
 $infoDirs += Get-ChildItem -Path $packageOutputPath -Filter "*.egg-info" -Recurse -Directory -ErrorAction SilentlyContinue
 if ($infoDirs) {
     $infoDirs | Remove-Item -Recurse -Force
-    Write-Host "  - å·²åˆ é™¤ $($infoDirs.Count) ä¸ªå…ƒæ•°æ®ç›®å½•ï¼ˆ.dist-info/.egg-infoï¼‰"
+    Write-Host "  - ÒÑÉ¾³ı $($infoDirs.Count) ¸öÔªÊı¾İÄ¿Â¼£¨.dist-info/.egg-info£©"
 }
 
-Write-Host "æ¸…ç†å®Œæˆï¼"
 
-Write-Host "æ‰“åŒ…å®Œæˆï¼š$packageOutputPath"
+# É¾³ı²»ĞèÒªµÄ PySide6 ²å¼ş
+$pluginsDir = Join-Path $packageOutputPath '_internal\PySide6\plugins'
+if (Test-Path $pluginsDir) {
+    $unusedPlugins = @(
+        'assetimporters', 'canbus', 'designer', 'geometryloaders', 'geoservices',
+        'multimedia', 'networkinformation', 'position', 'qmllint', 'qmltooling',
+        'renderers', 'renderplugins', 'sceneparsers', 'scxmldatamodel',
+        'sensors', 'texttospeech', 'webview'
+    )
+    $removedPlugins = 0
+    foreach ($plugin in $unusedPlugins) {
+        $pluginPath = Join-Path $pluginsDir $plugin
+        if (Test-Path $pluginPath) {
+            Remove-Item -LiteralPath $pluginPath -Recurse -Force
+            $removedPlugins++
+        }
+    }
+    if ($removedPlugins -gt 0) {
+        Write-Host "  - ÒÑÉ¾³ı $removedPlugins ¸ö²»ĞèÒªµÄ Qt ²å¼şÄ¿Â¼"
+    }
+}
+
+# É¾³ı PySide6 ¿ª·¢Í·ÎÄ¼şºÍÀàĞÍÏµÍ³ÎÄ¼ş
+$pyside6Dir = Join-Path $packageOutputPath '_internal\PySide6'
+if (Test-Path $pyside6Dir) {
+    foreach ($sub in @('include', 'typesystems')) {
+        $subPath = Join-Path $pyside6Dir $sub
+# Delete QML
+$qmlDir = Join-Path $pyside6Dir "qml\PySide6\qml"
+if (Test-Path $qmlDir) { Remove-Item -LiteralPath $qmlDir -Recurse -Force; Write-Host "  - ÒÑÉ¾³ı QML Ä¿Â¼" }
+
+        if (Test-Path $subPath) {
+            Remove-Item -LiteralPath $subPath -Recurse -Force
+            Write-Host "  - ÒÑÉ¾³ı PySide6/$sub"
+        }
+    }
+}
+
+# É¾³ı Playwright TypeScript ÀàĞÍ¶¨Òå
+$pwTypesDir = Join-Path $packageOutputPath '_internal\playwright\driver\package\types'
+if (Test-Path $pwTypesDir) {
+    Remove-Item -LiteralPath $pwTypesDir -Recurse -Force
+    Write-Host '  - ÒÑÉ¾³ı Playwright TypeScript ÀàĞÍ¶¨Òå'
+}
+
+Write-Host "ÇåÀíÍê³É£¡"
+
+Write-Host "´ò°üÍê³É£º$packageOutputPath"

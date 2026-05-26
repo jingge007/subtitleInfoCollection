@@ -84,7 +84,7 @@ hiddenimports += tmp_ret[2]
 # PySide6 - 收集后过滤 .pyi 和 .qm 文件
 tmp_ret = collect_all('PySide6')
 datas_pyside6 = [(src, dst) for src, dst in tmp_ret[0]
-                  if not (src.endswith('.pyi') or src.endswith('.qm'))]
+                  if not (src.endswith('.pyi') or src.endswith('.qm') or 'qtwebengine' in str(src).lower() or 'qml' in str(dst).lower().replace('\\\\', '/').split('/')[0] or src.endswith('.debug.pak') or src.endswith('.debug.bin'))]
 datas += datas_pyside6
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
@@ -222,7 +222,7 @@ exe = EXE(
     icon='assets/head_logo.ico',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,
     upx=True,
     console=False,
     disable_windowed_traceback=False,
@@ -235,8 +235,8 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=False,
+    strip=True,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=['*.local-browsers*'],
     name=APP_NAME,
 )
