@@ -40,7 +40,7 @@ def resolve_package_dist_paths() -> tuple[Path | None, Path | None]:
         configured_path = PROJECT_ROOT / configured_path
     configured_path = configured_path.resolve()
 
-    # 如果配置值最后一级已经是应用名，就把它视为最终产物目录。
+    # 如果配置值最后一级已经是应用名，就把它视为最终产物目录�?
     if configured_path.name == APP_NAME:
         return configured_path.parent, configured_path
     return configured_path, configured_path / APP_NAME
@@ -61,8 +61,8 @@ def collect_playwright_local_browsers() -> list[tuple[str, str]]:
         has_headless_shell = next(browsers_path.rglob('chrome-headless-shell.exe'), None)
         if has_chromium and has_headless_shell:
             return [(str(browsers_path), 'playwright/driver/package/.local-browsers')]
-    print(f'未找到完整的 Playwright 浏览器目录：{package_browsers_path} 或 {default_cache_path}')
-    print('请先运行：$env:PLAYWRIGHT_BROWSERS_PATH="0"; python -m playwright install chromium')
+    print(f'未找到完整的 Playwright 浏览器目录：{package_browsers_path} �?{default_cache_path}')
+    print('请先运行�?env:PLAYWRIGHT_BROWSERS_PATH="0"; python -m playwright install chromium')
     return []
 
 
@@ -75,13 +75,13 @@ datas = [('.env.example', '.'), ('.env', '.'), ('assets', 'assets')]
 binaries = []
 hiddenimports = []
 
-# 项目自身包
+# 项目自身�?
 tmp_ret = collect_all('subtitle_info_collection')
 datas += [(src, dst) for src, dst in tmp_ret[0] if not src.endswith('.pyi')]
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
 
-# PySide6 - 收集后过滤 .pyi 和 .qm 文件
+# PySide6 - 收集后过�?.pyi �?.qm 文件
 tmp_ret = collect_all('PySide6')
 datas_pyside6 = [(src, dst) for src, dst in tmp_ret[0]
                   if not (src.endswith('.pyi') or src.endswith('.qm') or 'qtwebengine' in str(src).lower() or 'qml' in str(dst).lower().replace('\\\\', '/').split('/')[0] or src.endswith('.debug.pak') or src.endswith('.debug.bin'))]
@@ -89,7 +89,7 @@ datas += datas_pyside6
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
 
-# PySide6-Fluent-Widgets - 收集后过滤 .pyi 文件
+# PySide6-Fluent-Widgets - 收集后过�?.pyi 文件
 tmp_ret = collect_all('qfluentwidgets')
 datas_qfw = [(src, dst) for src, dst in tmp_ret[0]
               if not src.endswith('.pyi')]
@@ -103,7 +103,7 @@ datas += [(src, dst) for src, dst in tmp_ret[0] if not src.endswith('.pyi')]
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
 
-# Playwright - 收集后过滤 .pyi 文件
+# Playwright - 收集后过�?.pyi 文件
 tmp_ret = collect_all('playwright')
 datas_playwright = [(src, dst) for src, dst in tmp_ret[0]
                     if not src.endswith('.pyi')]
@@ -111,7 +111,7 @@ datas += datas_playwright
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
 
-# 其他运行时依赖
+# 其他运行时依�?
 for _pkg in ['httpx', 'tenacity', 'aiolimiter', 'charset_normalizer',
              'pysubs2', 'dotenv', 'keyring', 'darkdetect',
              'bs4', 'py7zr', 'Cryptodome', 'greenlet']:
@@ -123,7 +123,7 @@ for _pkg in ['httpx', 'tenacity', 'aiolimiter', 'charset_normalizer',
     except Exception:
         pass
 
-# Playwright 浏览器 - 保留（根据用户选择）
+# Playwright 浏览�?- 保留（根据用户选择�?
 datas += collect_playwright_local_browsers()
 
 
@@ -222,7 +222,7 @@ exe = EXE(
     icon='assets/head_logo.ico',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
+    strip=False,
     upx=True,
     console=False,
     disable_windowed_traceback=False,
@@ -235,7 +235,7 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=True,
+    strip=False,
     upx=True,
     upx_exclude=['*.local-browsers*'],
     name=APP_NAME,
