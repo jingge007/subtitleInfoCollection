@@ -233,7 +233,8 @@ exe = EXE(
 )
 coll = COLLECT(
     exe,
-    a.binaries,
+    [(dest, source, typecode) for (dest, source, typecode) in a.binaries
+     if 'ms-playwright' not in str(source)],
     a.datas,
     strip=False,
     upx=True,

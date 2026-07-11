@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from .engines.tokenizer import tokenize_movie_name, tokenize_subtitle_content
 
 
 def now_iso() -> str:
@@ -144,6 +145,7 @@ class MovieInfo:
             "id": movie_id,
             "img": self.poster_url,
             "movieAlias": "",
+            "movieNameTokens": tokenize_movie_name(self.title_zh, self.title, self.original_title, self.year),
             "movieType": 0,
             "movieTypeDesc": "电影",
             "nm": self.title_zh or self.title,
@@ -265,6 +267,7 @@ class SubtitleEntry:
             "zhContent": self.zh_content,
             "enContent": self.en_content,
             "content": self.content,
+            "searchTokens": tokenize_subtitle_content(self.zh_content, self.en_content),
         }
 
 
