@@ -10,7 +10,7 @@ from PySide6.QtCore import QThread, Signal
 
 from ..automation import ClassicLinesAutomationOptions, ClassicLinesAutomationRunner
 from ..errors import VerificationResult
-from ..local_parser import parse_local_subtitle_file, write_movie_export_files, write_subtitle_export_files
+from ..local_parser import (parse_local_subtitle_file, write_movie_export_files, write_movie_search_index_file, write_subtitle_export_files)
 from ..models import TaskConfig
 from ..orchestrator import SubtitleCollectionOrchestrator
 from ..storage import AppStorage
@@ -141,6 +141,13 @@ class ParserWorker(QThread):
                 stamp,
                 unicloud_import_format=self.unicloud_import_format,
             )
+            index_export = write_movie_search_index_file(
+                subtitles=subtitles,
+                movies=list(movies_by_id.values()),
+                output_dir=self.output_dir,
+                stamp=stamp,
+                unicloud_import_format=self.unicloud_import_format,
+            )
             self.finished_success.emit(
                 {
                     "moviesPath": str(movies_export.paths[0]),
@@ -153,11 +160,16 @@ class ParserWorker(QThread):
                     "subtitlesFormat": subtitles_export.export_format,
                     "subtitleSplitLimitBytes": subtitles_export.split_limit_bytes,
                     "subtitleOversizedRecords": subtitles_export.oversized_records,
+                    "movieSearchIndexPath": str(index_export.paths[0]),
+                    "movieSearchIndexPaths": [str(path) for path in index_export.paths],
+                    "movieSearchIndexFormat": index_export.export_format,
+                    "movieSearchIndexSplitLimitBytes": index_export.split_limit_bytes,
+                    "movieSearchIndexOversizedRecords": index_export.oversized_records,
                     "totalCount": total,
                     "successCount": success_count,
                     "failureCount": failure_count,
                     "exportCount": len(subtitles),
-                    "outputPaths": [*[str(path) for path in movies_export.paths], *[str(path) for path in subtitles_export.paths]],
+                    "outputPaths": [*[str(path) for path in movies_export.paths], *[str(path) for path in subtitles_export.paths], *[str(path) for path in index_export.paths]],
                 }
             )
 

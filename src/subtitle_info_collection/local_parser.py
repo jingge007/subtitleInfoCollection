@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import re
 from dataclasses import dataclass, replace
@@ -64,6 +65,14 @@ class MovieExportResult:
 
 @dataclass(slots=True)
 class SubtitleExportResult:
+    paths: list[Path]
+    export_format: str
+    split_limit_bytes: int | None = None
+    oversized_records: int = 0
+
+
+@dataclass(slots=True)
+class MovieSearchIndexExportResult:
     paths: list[Path]
     export_format: str
     split_limit_bytes: int | None = None
@@ -193,6 +202,120 @@ def write_subtitle_export_files(
         paths.append(path)
 
     return SubtitleExportResult(
+        paths=paths,
+        export_format="unicloud-jsonl",
+        split_limit_bytes=split_limit_bytes,
+        oversized_records=oversized_records,
+    )
+
+
+def write_movie_search_index_file(
+    subtitles: list[dict[str, object]],
+    movies: list[dict[str, object]],
+    output_dir: Path,
+    stamp: str,
+    *,
+    unicloud_import_format: bool = True,
+    split_limit_bytes: int = UNICLOUD_IMPORT_SPLIT_BYTES,
+) -> MovieSearchIndexExportResult:
+    """从已导出字幕和电影数据，聚合生成 movieSearchIndex 文件。
+
+    按 movieId 聚合所有字幕的 searchTokens，合并该电影的 movieNameTokens，
+    写入 NDJSON 格式的 {stamp}-movieSearchIndex.json 文件。
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_path = output_dir / f"{stamp}-movieSearchIndex.json"
+
+    # Build movie name and movieNameTokens lookup
+    movie_name_map: dict[str, str] = {}
+    movie_name_tokens_map: dict[str, list[str]] = {}
+    for movie in movies:
+        mid = str(movie.get("movieId") or "")
+        if mid:
+            movie_name_map[mid] = str(movie.get("nm") or movie.get("title") or "")
+            movie_name_tokens_map[mid] = list(movie.get("movieNameTokens") or [])
+
+    # Group subtitle searchTokens by movieId
+    token_map: dict[str, set[str]] = {}
+    subtitle_count_map: dict[str, int] = {}
+    for sub in subtitles:
+        mid = str(sub.get("movieId") or "")
+        if not mid:
+            continue
+        if mid not in token_map:
+            token_map[mid] = set()
+            subtitle_count_map[mid] = 0
+        for t in (sub.get("searchTokens") or []):
+            if t:
+                token_map[mid].add(str(t))
+        subtitle_count_map[mid] += 1
+
+    # Build output records
+    now_ms = int(datetime.now().timestamp() * 1000)
+    records: list[dict[str, object]] = []
+    for mid in sorted(token_map.keys()):
+        token_set = token_map[mid]
+        # Merge with movieNameTokens
+        for t in movie_name_tokens_map.get(mid, []):
+            if t:
+                token_set.add(t)
+        # Sort by length desc, then alphabetically for ties
+        sorted_tokens = sorted(token_set, key=lambda x: (-len(x), x))
+        records.append({
+            "movieId": mid,
+            "movieName": movie_name_map.get(mid, ""),
+            "searchTokens": sorted_tokens,
+            "subtitleCount": subtitle_count_map.get(mid, 0),
+            "updatedAt": now_ms,
+        })
+
+    if not unicloud_import_format:
+        base_path.write_text(
+            json.dumps(records, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return MovieSearchIndexExportResult(paths=[base_path], export_format="json-array")
+
+    if split_limit_bytes <= 0:
+        raise ValueError("split_limit_bytes must be greater than 0")
+
+    chunks: list[list[bytes]] = []
+    current_chunk: list[bytes] = []
+    current_size = 0
+    oversized_records = 0
+
+    for record in records:
+        line = (
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        if len(line) > split_limit_bytes:
+            oversized_records += 1
+        if current_chunk and current_size + len(line) > split_limit_bytes:
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_size = 0
+        current_chunk.append(line)
+        current_size += len(line)
+
+    if current_chunk or not records:
+        chunks.append(current_chunk)
+
+    if len(chunks) == 1:
+        base_path.write_bytes(b"".join(chunks[0]))
+        return MovieSearchIndexExportResult(
+            paths=[base_path],
+            export_format="unicloud-jsonl",
+            split_limit_bytes=split_limit_bytes,
+            oversized_records=oversized_records,
+        )
+
+    paths: list[Path] = []
+    for index, chunk in enumerate(chunks, start=1):
+        path = output_dir / f"{stamp}-movieSearchIndex-{index}.json"
+        path.write_bytes(b"".join(chunk))
+        paths.append(path)
+
+    return MovieSearchIndexExportResult(
         paths=paths,
         export_format="unicloud-jsonl",
         split_limit_bytes=split_limit_bytes,
