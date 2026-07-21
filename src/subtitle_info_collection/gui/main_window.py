@@ -1086,7 +1086,7 @@ class MainWindow(FluentWindow):
         export_text = QVBoxLayout()
         export_text.setSpacing(2)
         export_title = StrongBodyLabel("uniCloud 控制台导入格式")
-        export_desc = CaptionLabel("开启后按 classic-line 导入规则解析、翻译补全英文，并按 45MB 拆分 jsonl 文件")
+        export_desc = CaptionLabel("开启后按 todays-line 导入规则解析、翻译补全英文，并按 45MB 拆分 jsonl 文件")
         export_desc.setStyleSheet(f"color: {TEXT_PLACEHOLDER};")
         export_desc.setWordWrap(True)
         export_text.addWidget(export_title)
@@ -1134,7 +1134,6 @@ class MainWindow(FluentWindow):
         for key, caption, color, bg_color, width in [
             ("total", "采集条数", GREEN, GREEN_SOFT, 88),
             ("pages", "请求页数", PRIMARY, PRIMARY_SOFT, 88),
-            ("output", "输出文件", ORANGE, ORANGE_SOFT, 360),
         ]:
             stat = QFrame(self)
             stat.setStyleSheet(
@@ -1142,18 +1141,14 @@ class MainWindow(FluentWindow):
             )
             stat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             stat.setFixedWidth(width)
-            stat.setFixedHeight(68 if key == "output" else 48)
+            stat.setFixedHeight(48)
             stat_layout = QVBoxLayout(stat)
             stat_layout.setContentsMargins(8, 5, 8, 5)
             stat_layout.setSpacing(1)
             stat_layout.setAlignment(Qt.AlignCenter)
-            value = QLabel("0" if key != "output" else "-")
+            value = QLabel("0")
             value.setAlignment(Qt.AlignCenter)
             value.setWordWrap(True)
-            if key == "output":
-                value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                value.setMinimumWidth(0)
-                value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
             label = CaptionLabel(caption)
             label.setAlignment(Qt.AlignCenter)
@@ -1165,6 +1160,33 @@ class MainWindow(FluentWindow):
         status_and_stats.addLayout(stats_row, 0)
 
         stats_inner.addLayout(status_and_stats)
+
+        output_stat = QFrame(self)
+        output_stat.setStyleSheet(
+            f"background: {ORANGE_SOFT}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+        )
+        output_stat.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        output_layout = QVBoxLayout(output_stat)
+        output_layout.setContentsMargins(8, 5, 8, 5)
+        output_layout.setSpacing(1)
+
+        output_value = QLabel("-")
+        output_value.setAlignment(Qt.AlignCenter)
+        output_value.setWordWrap(True)
+        output_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        output_value.setMinimumWidth(0)
+        output_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        output_value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {ORANGE};")
+        output_layout.addWidget(output_value)
+
+        output_caption = CaptionLabel("输出文件")
+        output_caption.setAlignment(Qt.AlignCenter)
+        output_caption.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
+        output_layout.addWidget(output_caption)
+
+        self.automation_stat_labels["output"] = output_value
+        stats_inner.addWidget(output_stat)
+
         stats_card.viewLayout.addLayout(stats_inner)
 
         log_card = self._card("日志")

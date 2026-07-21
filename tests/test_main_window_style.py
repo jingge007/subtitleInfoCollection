@@ -106,8 +106,8 @@ def test_automation_status_shows_full_output_paths(monkeypatch, tmp_path):
     app = _app()
     window = MainWindow()
 
-    first = tmp_path / "automation" / "classic-lines-1.json"
-    second = tmp_path / "automation" / "classic-lines-2.json"
+    first = tmp_path / "automation" / "todays-lines-1.json"
+    second = tmp_path / "automation" / "todays-lines-2.json"
     first.parent.mkdir()
     first.write_text("{}", encoding="utf-8")
     second.write_text("{}", encoding="utf-8")
@@ -227,9 +227,9 @@ def test_package_dist_dir_env_setting_is_documented_and_used():
     package_spec = spec_files["字幕采集工具.spec"]
 
     assert "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR=" in env_example
-    assert "CLASSIC_LINES_USERNAME=" in env_example
-    assert "CLASSIC_LINES_PASSWORD=" in env_example
-    assert "CLASSIC_LINES_TOKEN=" in env_example
+    assert "TODAYS_LINES_USERNAME=" in env_example
+    assert "TODAYS_LINES_PASSWORD=" in env_example
+    assert "TODAYS_LINES_TOKEN=" in env_example
     assert "BAIDU_TRANSLATE_APP_ID=" in env_example
     assert "BAIDU_TRANSLATE_SECRET=" in env_example
     assert "推荐填写最终目录" in env_example

@@ -20,18 +20,18 @@ DEFAULT_LOGIN_URL = "https://33tc.net"
 DEFAULT_API_URL = "https://ssv-api.agilestudio.cn/api/recommend/subtitle-list"
 DEFAULT_GOOGLE_TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
 DEFAULT_BAIDU_TRANSLATE_URL = "https://fanyi-api.baidu.com/api/trans/vip/translate"
-TOKEN_CACHE_FILE = "classic-lines-token-cache.json"
+TOKEN_CACHE_FILE = "todays-lines-token-cache.json"
 UNICLOUD_IMPORT_SPLIT_BYTES = 45 * 1024 * 1024
 
-CLASSIC_LINES_USERNAME_ENV = "CLASSIC_LINES_USERNAME"
-CLASSIC_LINES_PASSWORD_ENV = "CLASSIC_LINES_PASSWORD"
-CLASSIC_LINES_TOKEN_ENV = "CLASSIC_LINES_TOKEN"
-CLASSIC_LINES_TOKEN_TIME_ENV = "CLASSIC_LINES_TOKEN_TIME"
+TODAYS_LINES_USERNAME_ENV = "TODAYS_LINES_USERNAME"
+TODAYS_LINES_PASSWORD_ENV = "TODAYS_LINES_PASSWORD"
+TODAYS_LINES_TOKEN_ENV = "TODAYS_LINES_TOKEN"
+TODAYS_LINES_TOKEN_TIME_ENV = "TODAYS_LINES_TOKEN_TIME"
 BAIDU_TRANSLATE_APP_ID_ENV = "BAIDU_TRANSLATE_APP_ID"
 BAIDU_TRANSLATE_SECRET_ENV = "BAIDU_TRANSLATE_SECRET"
 
 
-class ClassicLinesAutomationError(RuntimeError):
+class TodaysLinesAutomationError(RuntimeError):
     """Raised when the 33 lines automation flow cannot continue."""
 
 
@@ -43,7 +43,7 @@ class SignedRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class ClassicLineExportResult:
+class TodaysLineExportResult:
     paths: list[Path]
     export_format: str
     split_limit_bytes: int | None = None
@@ -51,7 +51,7 @@ class ClassicLineExportResult:
 
 
 @dataclass(frozen=True, slots=True)
-class ClassicLineImportPayload:
+class TodaysLineImportPayload:
     records: list[dict[str, Any]]
     skipped_records: list[dict[str, Any]]
     input_count: int
@@ -63,7 +63,7 @@ class ClassicLineImportPayload:
 
 
 @dataclass(slots=True)
-class ClassicLinesAutomationOptions:
+class TodaysLinesAutomationOptions:
     data_dir: Path
     page_size: int = 50
     request_delay_seconds: float = 1.0
@@ -88,7 +88,7 @@ class ClassicLinesAutomationOptions:
 
 
 @dataclass(frozen=True, slots=True)
-class ClassicLinesAutomationResult:
+class TodaysLinesAutomationResult:
     output_path: Path
     output_paths: list[Path]
     total_count: int
@@ -128,35 +128,35 @@ def generate_signed_params(
     return SignedRequest(params=signed_params, signature=signature, timestamp_ms=timestamp)
 
 
-def normalize_classic_line_text(value: Any = "") -> str:
+def normalize_todays_line_text(value: Any = "") -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
-def get_classic_line_primary_key(record: dict[str, Any] | None = None) -> str:
+def get_todays_line_primary_key(record: dict[str, Any] | None = None) -> str:
     source = record or {}
-    value = source.get("classicLinesId", source.get("id"))
+    value = source.get("todaySLinesId", source.get("id"))
     if value is None or value == "":
         return ""
     return str(value).strip()
 
 
-def get_classic_line_content_key(record: dict[str, Any] | None = None) -> str:
+def get_todays_line_content_key(record: dict[str, Any] | None = None) -> str:
     source = record or {}
-    movie_name = normalize_classic_line_text(source.get("movieName"))
-    zh_content = normalize_classic_line_text(source.get("zhContent", source.get("description")))
-    en_content = normalize_classic_line_text(source.get("enContent", source.get("originContent")))
+    movie_name = normalize_todays_line_text(source.get("movieName"))
+    zh_content = normalize_todays_line_text(source.get("zhContent", source.get("description")))
+    en_content = normalize_todays_line_text(source.get("enContent", source.get("originContent")))
     return "::".join([movie_name, zh_content, en_content]).lower()
 
 
-def dedupe_classic_line_records(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def dedupe_todays_line_records(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     primary_keys: set[str] = set()
     content_keys: set[str] = set()
     unique_records: list[dict[str, Any]] = []
     skipped_records: list[dict[str, Any]] = []
 
     for index, record in enumerate(records):
-        primary_key = get_classic_line_primary_key(record)
-        content_key = get_classic_line_content_key(record)
+        primary_key = get_todays_line_primary_key(record)
+        content_key = get_todays_line_content_key(record)
         has_content_key = bool(content_key.replace("::", ""))
         duplicated_by_primary_key = bool(primary_key and primary_key in primary_keys)
         duplicated_by_content = bool(has_content_key and content_key in content_keys)
@@ -167,9 +167,9 @@ def dedupe_classic_line_records(records: list[dict[str, Any]]) -> tuple[list[dic
                     "record": record,
                     "index": index,
                     "reason": (
-                        "duplicate classicLinesId in current import"
+                        "duplicate todaySLinesId in current import"
                         if duplicated_by_primary_key
-                        else "duplicate classic line content in current import"
+                        else "duplicate todays line content in current import"
                     ),
                 }
             )
@@ -184,7 +184,7 @@ def dedupe_classic_line_records(records: list[dict[str, Any]]) -> tuple[list[dic
     return unique_records, skipped_records
 
 
-def transform_classic_line_record(item: dict[str, Any] | None, index: int) -> dict[str, Any]:
+def transform_todays_line_record(item: dict[str, Any] | None, index: int) -> dict[str, Any]:
     source = dict(item or {})
     description = source.pop("description", None)
     origin_content = source.pop("originContent", None)
@@ -202,7 +202,7 @@ def transform_classic_line_record(item: dict[str, Any] | None, index: int) -> di
             source.get("movieId"),
             subtitle.get("movieId"),
             source_id,
-            source.get("classicLinesId"),
+            source.get("todaySLinesId"),
             source_subtitles_id,
             subtitle_subtitles_id,
             generated_id,
@@ -212,7 +212,7 @@ def transform_classic_line_record(item: dict[str, Any] | None, index: int) -> di
 
     result = dict(source)
     result.pop("subtitlesId", None)
-    result["classicLinesId"] = record_id
+    result["todaySLinesId"] = record_id
     result["zhContent"] = description if description is not None else source.get("zhContent", "")
     result["enContent"] = origin_content if origin_content is not None else source.get("enContent", "")
     result["movieName"] = (
@@ -226,14 +226,14 @@ def transform_classic_line_record(item: dict[str, Any] | None, index: int) -> di
     return result
 
 
-async def prepare_classic_line_import_payload(
+async def prepare_todays_line_import_payload(
     raw_list: list[dict[str, Any]],
     *,
     translate_text: TranslateProvider | None = None,
     log: LogCallback | None = None,
-) -> ClassicLineImportPayload:
+) -> TodaysLineImportPayload:
     transformed_records = [
-        transform_classic_line_record(item, index)
+        transform_todays_line_record(item, index)
         for index, item in enumerate(raw_list)
     ]
     completed_records, translation_stats = await fill_missing_english_content(
@@ -241,8 +241,8 @@ async def prepare_classic_line_import_payload(
         translate_text=translate_text,
         log=log,
     )
-    unique_records, skipped_records = dedupe_classic_line_records(completed_records)
-    return ClassicLineImportPayload(
+    unique_records, skipped_records = dedupe_todays_line_records(completed_records)
+    return TodaysLineImportPayload(
         records=unique_records,
         skipped_records=skipped_records,
         input_count=len(raw_list),
@@ -266,8 +266,8 @@ async def fill_missing_english_content(
     pending_texts: list[str] = []
     seen_texts: set[str] = set()
     for record in records:
-        zh_content = normalize_classic_line_text(record.get("zhContent"))
-        en_content = normalize_classic_line_text(record.get("enContent"))
+        zh_content = normalize_todays_line_text(record.get("zhContent"))
+        en_content = normalize_todays_line_text(record.get("enContent"))
         if zh_content and not en_content and zh_content not in seen_texts:
             seen_texts.add(zh_content)
             pending_texts.append(zh_content)
@@ -278,7 +278,7 @@ async def fill_missing_english_content(
         try:
             result = translate_text(text)
             translation = await result if inspect.isawaitable(result) else result
-            normalized = normalize_classic_line_text(translation)
+            normalized = normalize_todays_line_text(translation)
             if normalized:
                 translations[text] = normalized
                 continue
@@ -291,7 +291,7 @@ async def fill_missing_english_content(
         {
             **record,
             "enContent": record.get("enContent") or translations.get(
-                normalize_classic_line_text(record.get("zhContent")),
+                normalize_todays_line_text(record.get("zhContent")),
                 "",
             ),
         }
@@ -304,23 +304,23 @@ async def fill_missing_english_content(
     }
 
 
-def write_classic_line_export_files(
+def write_todays_line_export_files(
     records: list[dict[str, Any]],
     output_dir: Path,
     file_stamp: str,
     *,
     unicloud_import_format: bool = True,
     split_limit_bytes: int = UNICLOUD_IMPORT_SPLIT_BYTES,
-) -> ClassicLineExportResult:
+) -> TodaysLineExportResult:
     output_dir.mkdir(parents=True, exist_ok=True)
-    base_path = output_dir / f"classic-lines-{file_stamp}.json"
+    base_path = output_dir / f"todays-lines-{file_stamp}.json"
 
     if not unicloud_import_format:
         base_path.write_text(
             json.dumps(records, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        return ClassicLineExportResult(paths=[base_path], export_format="json-array")
+        return TodaysLineExportResult(paths=[base_path], export_format="json-array")
 
     if split_limit_bytes <= 0:
         raise ValueError("split_limit_bytes must be greater than 0")
@@ -348,7 +348,7 @@ def write_classic_line_export_files(
 
     if len(chunks) == 1:
         base_path.write_bytes(b"".join(chunks[0]))
-        return ClassicLineExportResult(
+        return TodaysLineExportResult(
             paths=[base_path],
             export_format="unicloud-jsonl",
             split_limit_bytes=split_limit_bytes,
@@ -357,11 +357,11 @@ def write_classic_line_export_files(
 
     paths: list[Path] = []
     for index, chunk in enumerate(chunks, start=1):
-        path = output_dir / f"classic-lines-{file_stamp}-{index}.json"
+        path = output_dir / f"todays-lines-{file_stamp}-{index}.json"
         path.write_bytes(b"".join(chunk))
         paths.append(path)
 
-    return ClassicLineExportResult(
+    return TodaysLineExportResult(
         paths=paths,
         export_format="unicloud-jsonl",
         split_limit_bytes=split_limit_bytes,
@@ -369,10 +369,10 @@ def write_classic_line_export_files(
     )
 
 
-class ClassicLinesAutomationRunner:
+class TodaysLinesAutomationRunner:
     def __init__(
         self,
-        options: ClassicLinesAutomationOptions,
+        options: TodaysLinesAutomationOptions,
         *,
         token_provider: TokenProvider | None = None,
         translate_provider: TranslateProvider | None = None,
@@ -388,7 +388,7 @@ class ClassicLinesAutomationRunner:
         self.log = log or (lambda message: None)
         self._last_baidu_request_at = 0.0
 
-    async def run(self) -> ClassicLinesAutomationResult:
+    async def run(self) -> TodaysLinesAutomationResult:
         self.options.automation_dir.mkdir(parents=True, exist_ok=True)
         started = self.options.now_provider()
         self.log("启动 33 台词今日台词采集")
@@ -397,11 +397,11 @@ class ClassicLinesAutomationRunner:
             token = await self._get_valid_token(client)
             items, page_count = await self._fetch_all_items(client, token)
 
-            payload: ClassicLineImportPayload | None = None
+            payload: TodaysLineImportPayload | None = None
             export_items = items
             if self.options.unicloud_import_format:
-                self.log("按 classic-line / uniCloud 控制台导入格式处理数据")
-                payload = await prepare_classic_line_import_payload(
+                self.log("按 todays-line / uniCloud 控制台导入格式处理数据")
+                payload = await prepare_todays_line_import_payload(
                     items,
                     translate_text=self.translate_provider or (
                         lambda text: self._translate_chinese_to_english(client, text)
@@ -411,7 +411,7 @@ class ClassicLinesAutomationRunner:
                 export_items = payload.records
 
         file_stamp = started.strftime("%Y-%m-%d_%H-%M-%S")
-        export_result = write_classic_line_export_files(
+        export_result = write_todays_line_export_files(
             export_items,
             self.options.automation_dir,
             file_stamp,
@@ -420,7 +420,7 @@ class ClassicLinesAutomationRunner:
         )
         finished = self.options.now_provider()
         self._log_export_result(export_result, len(export_items), payload)
-        return ClassicLinesAutomationResult(
+        return TodaysLinesAutomationResult(
             output_path=export_result.paths[0],
             output_paths=export_result.paths,
             total_count=len(export_items),
@@ -452,7 +452,7 @@ class ClassicLinesAutomationRunner:
 
     def _read_cached_token(self) -> str:
         env_values = self._read_env_values()
-        token = str(env_values.get(CLASSIC_LINES_TOKEN_ENV) or "").strip()
+        token = str(env_values.get(TODAYS_LINES_TOKEN_ENV) or "").strip()
         if token:
             return token
 
@@ -470,8 +470,8 @@ class ClassicLinesAutomationRunner:
             return
         timestamp = str(token_time or int(time.time() * 1000))
         values = {
-            CLASSIC_LINES_TOKEN_ENV: token,
-            CLASSIC_LINES_TOKEN_TIME_ENV: timestamp,
+            TODAYS_LINES_TOKEN_ENV: token,
+            TODAYS_LINES_TOKEN_TIME_ENV: timestamp,
         }
         _upsert_env_values(self.options.env_path, values)
         os.environ.update(values)
@@ -485,22 +485,22 @@ class ClassicLinesAutomationRunner:
 
         token = str(token or "").strip()
         if not token:
-            raise ClassicLinesAutomationError("未获取到 33 台词登录 token")
+            raise TodaysLinesAutomationError("未获取到 33 台词登录 token")
         return token
 
     async def _get_token_by_playwright(self) -> str:
         env_values = self._read_env_values()
-        username = str(env_values.get(CLASSIC_LINES_USERNAME_ENV) or "").strip()
-        password = str(env_values.get(CLASSIC_LINES_PASSWORD_ENV) or "").strip()
+        username = str(env_values.get(TODAYS_LINES_USERNAME_ENV) or "").strip()
+        password = str(env_values.get(TODAYS_LINES_PASSWORD_ENV) or "").strip()
         if not username or not password:
-            raise ClassicLinesAutomationError(
-                "缺少 CLASSIC_LINES_USERNAME 或 CLASSIC_LINES_PASSWORD，无法自动登录 33 台词"
+            raise TodaysLinesAutomationError(
+                "缺少 TODAYS_LINES_USERNAME 或 TODAYS_LINES_PASSWORD，无法自动登录 33 台词"
             )
 
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:  # pragma: no cover
-            raise ClassicLinesAutomationError("缺少 Playwright，无法自动登录 33 台词") from exc
+            raise TodaysLinesAutomationError("缺少 Playwright，无法自动登录 33 台词") from exc
 
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=self.options.headless)
@@ -519,7 +519,7 @@ class ClassicLinesAutomationRunner:
                 ]
                 try:
                     await self._fill_first_visible(page, username_selectors, username)
-                except ClassicLinesAutomationError:
+                except TodaysLinesAutomationError:
                     await self._click_first_visible(
                         page,
                         [
@@ -566,7 +566,7 @@ class ClassicLinesAutomationRunner:
                     "",
                 )
                 if not token:
-                    raise ClassicLinesAutomationError("登录完成后仍未找到 web_user_token")
+                    raise TodaysLinesAutomationError("登录完成后仍未找到 web_user_token")
                 return token
             finally:
                 await browser.close()
@@ -589,7 +589,7 @@ class ClassicLinesAutomationRunner:
             payload = await self._request_page(client, token, page=page, limit=self.options.page_size)
             if int(payload.get("code", -1)) != 0:
                 message = payload.get("msg") or "33 台词接口返回错误"
-                raise ClassicLinesAutomationError(str(message))
+                raise TodaysLinesAutomationError(str(message))
 
             data = payload.get("data") or {}
             page_items = list(data.get("list") or [])
@@ -644,7 +644,7 @@ class ClassicLinesAutomationRunner:
     ) -> str:
         try:
             google_result = await self._translate_by_google(client, text)
-            if normalize_classic_line_text(google_result):
+            if normalize_todays_line_text(google_result):
                 return google_result
         except Exception as google_error:  # noqa: BLE001
             self.log(f"Google 翻译失败，尝试百度兜底：{google_error}")
@@ -653,7 +653,7 @@ class ClassicLinesAutomationRunner:
         if not env_values.get(BAIDU_TRANSLATE_APP_ID_ENV) or not env_values.get(
             BAIDU_TRANSLATE_SECRET_ENV
         ):
-            raise ClassicLinesAutomationError("Google 翻译失败，且未配置百度翻译凭据")
+            raise TodaysLinesAutomationError("Google 翻译失败，且未配置百度翻译凭据")
         return await self._translate_by_baidu(client, text, env_values)
 
     async def _translate_by_google(self, client: httpx.AsyncClient, text: str) -> str:
@@ -703,17 +703,17 @@ class ClassicLinesAutomationRunner:
         response.raise_for_status()
         data = response.json()
         if data.get("error_code"):
-            raise ClassicLinesAutomationError(data.get("error_msg") or "百度翻译接口返回错误")
+            raise TodaysLinesAutomationError(data.get("error_msg") or "百度翻译接口返回错误")
         results = data.get("trans_result") or []
         return "".join(str(item.get("dst") or "") for item in results).strip()
 
     def _read_env_values(self) -> dict[str, str]:
         values = _read_env_values(self.options.env_path)
         for key in [
-            CLASSIC_LINES_USERNAME_ENV,
-            CLASSIC_LINES_PASSWORD_ENV,
-            CLASSIC_LINES_TOKEN_ENV,
-            CLASSIC_LINES_TOKEN_TIME_ENV,
+            TODAYS_LINES_USERNAME_ENV,
+            TODAYS_LINES_PASSWORD_ENV,
+            TODAYS_LINES_TOKEN_ENV,
+            TODAYS_LINES_TOKEN_TIME_ENV,
             BAIDU_TRANSLATE_APP_ID_ENV,
             BAIDU_TRANSLATE_SECRET_ENV,
         ]:
@@ -739,7 +739,7 @@ class ClassicLinesAutomationRunner:
                     return
             except Exception:  # noqa: BLE001
                 continue
-        raise ClassicLinesAutomationError("自动登录失败：未找到可填写的登录输入框")
+        raise TodaysLinesAutomationError("自动登录失败：未找到可填写的登录输入框")
 
     async def _click_first_visible(self, page: Any, selectors: list[str]) -> None:
         for selector in selectors:
@@ -750,17 +750,17 @@ class ClassicLinesAutomationRunner:
                     return
             except Exception:  # noqa: BLE001
                 continue
-        raise ClassicLinesAutomationError("自动登录失败：未找到登录按钮")
+        raise TodaysLinesAutomationError("自动登录失败：未找到登录按钮")
 
     def _log_export_result(
         self,
-        export_result: ClassicLineExportResult,
+        export_result: TodaysLineExportResult,
         count: int,
-        payload: ClassicLineImportPayload | None,
+        payload: TodaysLineImportPayload | None,
     ) -> None:
         if payload:
             self.log(
-                "classic-line 处理完成："
+                "todays-line 处理完成："
                 f"输入 {payload.input_count} 条，导出 {count} 条，"
                 f"本地去重 {payload.local_duplicate_count} 条"
             )

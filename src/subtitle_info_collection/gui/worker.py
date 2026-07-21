@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from ..automation import ClassicLinesAutomationOptions, ClassicLinesAutomationRunner
+from ..automation import TodaysLinesAutomationOptions, TodaysLinesAutomationRunner
 from ..errors import VerificationResult
 from ..local_parser import (parse_local_subtitle_file, write_movie_export_files, write_movie_search_index_file, write_subtitle_export_files)
 from ..models import TaskConfig
@@ -197,8 +197,8 @@ class AutomationScriptWorker(QThread):
 
     def run(self) -> None:
         async def _run() -> None:
-            runner = ClassicLinesAutomationRunner(
-                ClassicLinesAutomationOptions(
+            runner = TodaysLinesAutomationRunner(
+                TodaysLinesAutomationOptions(
                     data_dir=self.data_dir,
                     env_path=self.env_path,
                     unicloud_import_format=self.unicloud_import_format,
