@@ -109,6 +109,7 @@ TokenProvider = Callable[[], str | Awaitable[str]]
 TranslateProvider = Callable[[str], str | Awaitable[str]]
 LogCallback = Callable[[str], None]
 SleepCallback = Callable[[float], Awaitable[None]]
+ProgressCallback = Callable[[int, int, str], None]
 
 
 def generate_signed_params(
@@ -379,6 +380,7 @@ class TodaysLinesAutomationRunner:
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: SleepCallback = asyncio.sleep,
         log: LogCallback | None = None,
+        progress: ProgressCallback | None = None,
     ) -> None:
         self.options = options
         self.token_provider = token_provider
@@ -386,6 +388,7 @@ class TodaysLinesAutomationRunner:
         self.transport = transport
         self.sleep = sleep
         self.log = log or (lambda message: None)
+        self.progress = progress or (lambda current, total, tip: None)
         self._last_baidu_request_at = 0.0
 
     async def run(self) -> TodaysLinesAutomationResult:
@@ -600,6 +603,7 @@ class TodaysLinesAutomationRunner:
             items.extend(page_items)
             page_count += 1
             self.log(f"第 {page} 页获取 {len(page_items)} 条，累计 {len(items)}/{total}")
+            self.progress(len(items), total or len(items), f"第 {page} 页")
 
             if total and len(items) >= total:
                 break

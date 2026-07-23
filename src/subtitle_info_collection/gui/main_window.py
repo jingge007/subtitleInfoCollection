@@ -81,7 +81,12 @@ from .styles import (
     RED,
     RED_SOFT,
 )
-from .worker import AutomationScriptWorker, CollectorWorker, ParserWorker
+from .worker import (
+    AutomationScriptWorker,
+    ClassicLinesAutomationWorker,
+    CollectorWorker,
+    ParserWorker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +143,9 @@ class MainWindow(FluentWindow):
         self.collector_worker: CollectorWorker | None = None
         self.parser_worker: ParserWorker | None = None
         self.automation_worker: AutomationScriptWorker | None = None
+        self.classic_automation_worker: ClassicLinesAutomationWorker | None = None
+        self.latest_classic_output_path: Path | None = None
+        self.latest_classic_output_paths: list[Path] = []
         self.latest_automation_output_path: Path | None = None
         self.latest_automation_output_paths: list[Path] = []
         self._verification_dialog: QDialog | None = None
@@ -164,6 +172,9 @@ class MainWindow(FluentWindow):
         self._collector_page = self._build_collector_tab()
         self._parser_page = self._build_parser_tab()
         self._automation_page = self._build_automation_tab()
+        self._todays_lines_detail_page = self._automation_page
+        self._classic_lines_page = self._build_classic_lines_page()
+        self._script_center_page = self._build_script_center_page()
         self._config_page = self._build_config_page()
         self._history_page = self._build_history_tab()
         self._settings_page = self._build_settings_tab()
@@ -178,7 +189,13 @@ class MainWindow(FluentWindow):
             self._parser_page, FIF.DOCUMENT, "字幕解析", NavigationItemPosition.TOP,
         )
         self.addSubInterface(
-            self._automation_page, FIF.ROBOT, "自动化脚本", NavigationItemPosition.TOP,
+            self._script_center_page, FIF.ROBOT, "脚本中心", NavigationItemPosition.TOP,
+        )
+        self.addSubInterface(
+            self._todays_lines_detail_page, FIF.CALENDAR, "33台词今日台词", NavigationItemPosition.TOP,
+        )
+        self.addSubInterface(
+            self._classic_lines_page, FIF.MOVIE, "33台词经典台词", NavigationItemPosition.TOP,
         )
         self.addSubInterface(
             self._config_page, FIF.GLOBE, "配置项", NavigationItemPosition.TOP,
@@ -1041,6 +1058,263 @@ class MainWindow(FluentWindow):
 
     # ── History Tab ───────────────────────────────────────────────────
 
+
+    # 构建脚本中心卡片概览页
+    def _build_script_center_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("scriptCenterPage")
+        layout = self._page_layout(page)
+        layout.setAlignment(Qt.AlignTop)
+
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        title = SubtitleLabel("脚本中心")
+        title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT};")
+        subtitle = BodyLabel("选择需要运行的自动化脚本")
+        subtitle.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        header.addLayout(title_col, 1)
+        layout.addLayout(header)
+
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(12)
+
+        # 生成脚本中心入口卡片
+        def _sc(icon_t, title_t, desc_t, status_fn, target):
+            card = CardWidget(self)
+            card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            card.setFixedHeight(200)
+            inner = QVBoxLayout(card)
+            inner.setContentsMargins(16, 12, 16, 12)
+            inner.setSpacing(6)
+            il = StrongBodyLabel(icon_t)
+            il.setStyleSheet("font-size: 28px;")
+            inner.addWidget(il)
+            inner.addWidget(StrongBodyLabel(title_t))
+            d = BodyLabel(desc_t)
+            d.setWordWrap(True)
+            d.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
+            inner.addWidget(d)
+            s = CaptionLabel(status_fn())
+            s.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
+            inner.addWidget(s)
+            inner.addStretch(1)
+            btn = PushButton("进入脚本", self)
+            btn.setIcon(FIF.FOLDER)
+            btn.clicked.connect(lambda checked=False, t=target: self.switchTo(t))
+            inner.addWidget(btn)
+            return card
+
+        # 今日台词卡片状态文案
+        def ts():
+            if not self.latest_automation_output_paths:
+                return "尚未运行"
+            v = [p for p in self.latest_automation_output_paths if p.exists()]
+            return f"上次运行: 输出 {len(v)} 个文件" if v else "已运行"
+
+        # 经典台词卡片状态文案
+        def cs():
+            if not self.latest_classic_output_paths:
+                return "尚未运行"
+            v = [p for p in self.latest_classic_output_paths if p.exists()]
+            return f"上次运行: 输出 {len(v)} 个文件" if v else "已运行"
+
+        cards_row.addWidget(_sc(
+            "📋", "33台词今日台词采集",
+            "从 33 台词 API 实时采集每日台词对白",
+            ts, self._todays_lines_detail_page,
+        ), 1)
+        cards_row.addWidget(_sc(
+            "🎬", "33台词经典台词爬取",
+            "从 33tc.net/lines 爬取影片经典对白",
+            cs, self._classic_lines_page,
+        ), 1)
+
+        pc = CardWidget(self)
+        pc.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        pc.setFixedHeight(200)
+        pi = QVBoxLayout(pc)
+        pi.setContentsMargins(16, 12, 16, 12)
+        pi.setAlignment(Qt.AlignCenter)
+        p2 = StrongBodyLabel("+")
+        p2.setStyleSheet(f"font-size: 32px; color: {TEXT_PLACEHOLDER};")
+        pi.addWidget(p2, 0, Qt.AlignCenter)
+        p3 = CaptionLabel("更多脚本待续")
+        p3.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
+        pi.addWidget(p3, 0, Qt.AlignCenter)
+        cards_row.addWidget(pc, 1)
+
+        layout.addLayout(cards_row)
+        layout.addStretch(1)
+        return page
+
+    # 构建经典台词采集详情页（布局对齐今日台词）
+    def _build_classic_lines_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("classicLinesPage")
+        layout = self._page_layout(page)
+
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        back_btn = PushButton("← 返回脚本中心", self)
+        back_btn.clicked.connect(lambda: self.switchTo(self._script_center_page))
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        title = SubtitleLabel("33台词经典台词采集")
+        title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT};")
+        subtitle = BodyLabel("从 33tc.net/lines 爬取影片经典对白，约 1300 部电影 / 19000+ 句对白")
+        subtitle.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        header.addWidget(back_btn)
+        header.addLayout(title_col, 1)
+        layout.addLayout(header)
+
+        action_card = self._card("33 台词经典台词")
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        self.classic_run_button = PrimaryPushButton("执行", self)
+        self.classic_run_button.setIcon(FIF.PLAY)
+        self.classic_run_button.clicked.connect(self.start_classic_automation)
+        self.classic_open_button = PushButton("打开文件", self)
+        self.classic_open_button.setIcon(FIF.FOLDER)
+        self.classic_open_button.setEnabled(False)
+        self.classic_open_button.clicked.connect(self.open_classic_output_file)
+        self.classic_reset_button = PushButton("重置", self)
+        self.classic_reset_button.setIcon(FIF.SYNC)
+        self.classic_reset_button.clicked.connect(self.reset_classic_panel)
+        self.classic_status = BodyLabel("等待执行")
+        self.classic_status.setStyleSheet(f"font-size: 15px; color: {TEXT};")
+        self.classic_status.setWordWrap(True)
+        self.classic_status.setMinimumWidth(260)
+        action_row.addWidget(self.classic_run_button)
+        action_row.addWidget(self.classic_open_button)
+        action_row.addWidget(self.classic_reset_button)
+        action_row.addStretch(1)
+        action_card.viewLayout.addLayout(action_row)
+
+        export_options = QHBoxLayout()
+        export_options.setSpacing(10)
+        export_text = QVBoxLayout()
+        export_text.setSpacing(2)
+        export_title = StrongBodyLabel("uniCloud 控制台导入格式")
+        export_desc = CaptionLabel("开启后按 jsonl 格式导出并按 45MB 拆分文件")
+        export_desc.setStyleSheet(f"color: {TEXT_PLACEHOLDER};")
+        export_desc.setWordWrap(True)
+        export_text.addWidget(export_title)
+        export_text.addWidget(export_desc)
+        self.classic_unicloud_switch = SwitchButton(self)
+        self.classic_unicloud_switch.setChecked(True)
+        self.classic_unicloud_switch.setOnText("开启")
+        self.classic_unicloud_switch.setOffText("关闭")
+        export_options.addLayout(export_text, 1)
+        export_options.addWidget(self.classic_unicloud_switch)
+        action_card.viewLayout.addLayout(export_options)
+
+        stats_card = self._card("任务状态")
+        stats_inner = QVBoxLayout()
+        stats_inner.setSpacing(8)
+
+        status_and_stats = QHBoxLayout()
+        status_and_stats.setSpacing(8)
+        self.classic_progress_ring = ProgressRing(self)
+        self.classic_progress_ring.setFixedSize(48, 48)
+        self.classic_progress_ring.setRange(0, 100)
+        self.classic_progress_ring.setValue(0)
+        self.classic_progress_ring.setStrokeWidth(5)
+        classic_status_info = QVBoxLayout()
+        classic_status_info.setSpacing(3)
+        self.classic_progress_label = CaptionLabel("0%")
+        self.classic_progress_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
+        classic_status_info.addWidget(self.classic_status)
+        classic_status_info.addWidget(self.classic_progress_label)
+        classic_status_info.addStretch(1)
+        status_panel = QWidget(self)
+        status_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        status_panel_layout = QHBoxLayout(status_panel)
+        status_panel_layout.setContentsMargins(0, 0, 0, 0)
+        status_panel_layout.setSpacing(10)
+        status_panel_layout.addWidget(self.classic_progress_ring)
+        status_panel_layout.addLayout(classic_status_info, 1)
+        status_and_stats.addWidget(status_panel, 3)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(6)
+        self.classic_stat_labels: dict[str, QLabel] = {}
+        for key, caption, color, bg_color, width in [
+            ("movies", "电影数", PRIMARY, PRIMARY_SOFT, 88),
+            ("lines", "台词数", GREEN, GREEN_SOFT, 88),
+            ("pages", "请求页数", ORANGE, ORANGE_SOFT, 88),
+        ]:
+            stat = QFrame(self)
+            stat.setStyleSheet(
+                f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+            )
+            stat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            stat.setFixedWidth(width)
+            stat.setFixedHeight(48)
+            stat_layout = QVBoxLayout(stat)
+            stat_layout.setContentsMargins(8, 5, 8, 5)
+            stat_layout.setSpacing(1)
+            stat_layout.setAlignment(Qt.AlignCenter)
+            value = QLabel("0")
+            value.setAlignment(Qt.AlignCenter)
+            value.setWordWrap(True)
+            value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
+            label = CaptionLabel(caption)
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
+            stat_layout.addWidget(value)
+            stat_layout.addWidget(label)
+            self.classic_stat_labels[key] = value
+            stats_row.addWidget(stat)
+        status_and_stats.addLayout(stats_row, 0)
+        stats_inner.addLayout(status_and_stats)
+
+        output_stat = QFrame(self)
+        output_stat.setStyleSheet(
+            f"background: {ORANGE_SOFT}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+        )
+        output_stat.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        output_layout = QVBoxLayout(output_stat)
+        output_layout.setContentsMargins(8, 5, 8, 5)
+        output_layout.setSpacing(1)
+        output_value = QLabel("-")
+        output_value.setAlignment(Qt.AlignCenter)
+        output_value.setWordWrap(True)
+        output_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        output_value.setMinimumWidth(0)
+        output_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        output_value.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {ORANGE};")
+        output_layout.addWidget(output_value)
+        output_caption = CaptionLabel("输出文件")
+        output_caption.setAlignment(Qt.AlignCenter)
+        output_caption.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
+        output_layout.addWidget(output_caption)
+        self.classic_stat_labels["output"] = output_value
+        stats_inner.addWidget(output_stat)
+        stats_card.viewLayout.addLayout(stats_inner)
+
+        log_card = self._card("日志")
+        self.classic_copy_log_button = TransparentToolButton(FIF.COPY, self)
+        self.classic_copy_log_button.setFixedSize(28, 28)
+        self.classic_copy_log_button.setToolTip("复制日志")
+        self.classic_copy_log_button.clicked.connect(self.copy_classic_log)
+        log_card.headerLayout.addStretch(1)
+        log_card.headerLayout.addWidget(self.classic_copy_log_button)
+        self.classic_log = QtTextEdit(self)
+        self._configure_log_area(self.classic_log)
+        log_card.viewLayout.addWidget(self.classic_log)
+
+        layout.addWidget(action_card)
+        layout.addWidget(stats_card)
+        layout.addWidget(log_card, 1)
+        return page
+
+    # 构建今日台词采集详情页
     def _build_automation_tab(self) -> QWidget:
         page = QWidget()
         page.setObjectName("automationPage")
@@ -1048,14 +1322,17 @@ class MainWindow(FluentWindow):
 
         header = QHBoxLayout()
         header.setSpacing(12)
+        back_btn = PushButton("← 返回脚本中心", self)
+        back_btn.clicked.connect(lambda: self.switchTo(self._script_center_page))
         title_col = QVBoxLayout()
         title_col.setSpacing(2)
-        title = SubtitleLabel("自动化脚本")
+        title = SubtitleLabel("33台词今日台词采集")
         title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT};")
-        subtitle = BodyLabel("运行 33 台词今日台词采集，结果保存到数据目录的 automation 文件夹")
+        subtitle = BodyLabel("从 33 台词 API 实时采集每日台词对白，结果保存到数据目录的 automation 文件夹")
         subtitle.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
+        header.addWidget(back_btn)
         header.addLayout(title_col, 1)
         layout.addLayout(header)
 
@@ -1176,7 +1453,7 @@ class MainWindow(FluentWindow):
         output_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
         output_value.setMinimumWidth(0)
         output_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        output_value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {ORANGE};")
+        output_value.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {ORANGE};")
         output_layout.addWidget(output_value)
 
         output_caption = CaptionLabel("输出文件")
@@ -1929,8 +2206,8 @@ class MainWindow(FluentWindow):
 
         self.automation_log.clear()
         self.automation_status.setText("执行中")
-        self.automation_progress_ring.setValue(35)
-        self.automation_progress_label.setText("执行中")
+        self.automation_progress_ring.setValue(0)
+        self.automation_progress_label.setText("0%")
         self.automation_run_button.setEnabled(False)
         self.automation_open_button.setEnabled(False)
         self.latest_automation_output_path = None
@@ -1946,9 +2223,22 @@ class MainWindow(FluentWindow):
             self.automation_unicloud_import_switch.isChecked(),
         )
         self.automation_worker.log_message.connect(self.append_automation_log)
+        self.automation_worker.progress_changed.connect(self._on_automation_progress)
         self.automation_worker.finished_success.connect(self.automation_finished)
         self.automation_worker.finished_error.connect(self.automation_failed)
         self.automation_worker.start()
+
+    # 刷新今日台词采集进度百分比与条数
+    def _on_automation_progress(self, current: int, total: int, tip: str) -> None:
+        if total > 0:
+            pct = min(100, int(current * 100 / total))
+            self.automation_progress_ring.setValue(pct)
+            self.automation_progress_label.setText(f"{pct}%")
+        self.automation_stat_labels["total"].setText(str(current))
+        if tip.startswith("第 ") and tip.endswith(" 页"):
+            page_text = tip[2:-2].strip()
+            if page_text.isdigit():
+                self.automation_stat_labels["pages"].setText(page_text)
 
     def append_automation_log(self, message: str) -> None:
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2044,6 +2334,112 @@ class MainWindow(FluentWindow):
         self.automation_stat_labels["pages"].setText("0")
         self.automation_stat_labels["output"].setText("-")
         self.automation_stat_labels["output"].setToolTip("")
+
+
+
+    # ── Classic Lines Flow ────────────────────────────────────────────
+
+    # 启动经典台词全量采集（延迟/无头等参数使用内部默认值）
+    def start_classic_automation(self) -> None:
+        if self.classic_automation_worker and self.classic_automation_worker.isRunning():
+            return
+        try:
+            data_dir = self._ensure_storage_for_current_data_dir()
+        except ValueError as exc:
+            InfoBar.warning("\u6570\u636e\u76ee\u5f55\u65e0\u6548", str(exc), parent=self, duration=3000)
+            return
+        self.classic_log.clear()
+        self.classic_status.setText("执行中")
+        self.classic_progress_ring.setValue(0)
+        self.classic_progress_label.setText("0%")
+        self.classic_run_button.setEnabled(False)
+        self.classic_open_button.setEnabled(False)
+        self.latest_classic_output_path = None
+        self.latest_classic_output_paths = []
+        for k in ["movies", "lines", "pages"]:
+            self.classic_stat_labels[k].setText("0")
+        self.classic_stat_labels["output"].setText("-")
+        self.classic_stat_labels["output"].setToolTip("")
+        self.classic_automation_worker = ClassicLinesAutomationWorker(
+            data_dir,
+            unicloud_import_format=self.classic_unicloud_switch.isChecked(),
+        )
+        self.classic_automation_worker.log_message.connect(self.append_classic_log)
+        self.classic_automation_worker.progress_changed.connect(self._on_classic_progress)
+        self.classic_automation_worker.finished_success.connect(self.classic_automation_finished)
+        self.classic_automation_worker.finished_error.connect(self.classic_automation_failed)
+        self.classic_automation_worker.start()
+
+    # 刷新经典台词采集进度环与统计（分页明细由 Runner 写日志）
+    def _on_classic_progress(self, current: int, total: int, movie_name: str) -> None:
+        if total > 0:
+            pct = int(current * 100 / total)
+            self.classic_progress_ring.setValue(pct)
+            self.classic_progress_label.setText(f"{pct}%")
+        self.classic_stat_labels["movies"].setText(str(current))
+        # 按站点每页 24 部估算当前页数
+        self.classic_stat_labels["pages"].setText(str(max(1, (current + 23) // 24)))
+
+    def append_classic_log(self, message: str) -> None:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        for t in str(message).splitlines() or [""]:
+            self.classic_log.append(f"[{stamp}] {t}")
+
+    def copy_classic_log(self) -> None:
+        t = self.classic_log.toPlainText()
+        if not t.strip():
+            InfoBar.info("\u6682\u65e0\u65e5\u5fd7", "\u5f53\u524d\u6ca1\u6709\u53ef\u590d\u5236\u7684\u65e5\u5fd7\u3002", parent=self, duration=2000)
+            return
+        QApplication.clipboard().setText(t)
+        InfoBar.success("\u5df2\u590d\u5236", "\u7ecf\u5178\u53f0\u8bcd\u65e5\u5fd7\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f\u3002", parent=self, duration=2000)
+
+    def classic_automation_finished(self, result: dict) -> None:
+        self.classic_run_button.setEnabled(True)
+        self.classic_status.setText("\u6267\u884c\u5b8c\u6210")
+        self.classic_progress_ring.setValue(100)
+        self.classic_progress_label.setText("100%")
+        output_paths = [Path(str(p)) for p in (result.get("outputPaths") or []) if str(p or "").strip()]
+        op = output_paths[0] if output_paths else Path(str(result.get("outputPath") or ""))
+        self.latest_classic_output_path = op
+        self.latest_classic_output_paths = output_paths or ([op] if str(op) else [])
+        self.classic_open_button.setEnabled(any(p.exists() for p in self.latest_classic_output_paths))
+        self.classic_stat_labels["movies"].setText(str(result.get("totalMovies", 0)))
+        self.classic_stat_labels["lines"].setText(str(result.get("totalLines", 0)))
+        self.classic_stat_labels["pages"].setText(str(result.get("pageCount", 0)))
+        ol = "\n".join(str(p) for p in self.latest_classic_output_paths) or "-"
+        self.classic_stat_labels["output"].setText(ol)
+        self.classic_stat_labels["output"].setToolTip("\n".join(str(p) for p in self.latest_classic_output_paths))
+        InfoBar.success("\u7ecf\u5178\u53f0\u8bcd\u91c7\u96c6\u5b8c\u6210", f"\u8f93\u51fa {len(self.latest_classic_output_paths)} \u4e2a\u6587\u4ef6", parent=self, duration=5000)
+
+    def classic_automation_failed(self, message: str) -> None:
+        self.classic_run_button.setEnabled(True)
+        self.classic_status.setText("\u6267\u884c\u5931\u8d25")
+        self.classic_progress_ring.setValue(0)
+        self.classic_progress_label.setText("\u5931\u8d25")
+        self.append_classic_log(message)
+        InfoBar.error("\u7ecf\u5178\u53f0\u8bcd\u91c7\u96c6\u5931\u8d25", message, parent=self, duration=5000)
+
+    def open_classic_output_file(self) -> None:
+        if len(self.latest_classic_output_paths) > 1 and self.latest_classic_output_paths[0].parent:
+            self.open_path(self.latest_classic_output_paths[0].parent)
+        elif self.latest_classic_output_path:
+            self.open_path(self.latest_classic_output_path)
+
+    def reset_classic_panel(self) -> None:
+        if self.classic_automation_worker and self.classic_automation_worker.isRunning():
+            InfoBar.warning("\u4efb\u52a1\u8fd0\u884c\u4e2d", "\u7ecf\u5178\u53f0\u8bcd\u91c7\u96c6\u6267\u884c\u4e2d\uff0c\u6682\u65f6\u4e0d\u80fd\u91cd\u7f6e\u3002", parent=self, duration=3000)
+            return
+        self.latest_classic_output_path = None
+        self.classic_status.setText("\u7b49\u5f85\u6267\u884c")
+        self.classic_progress_ring.setValue(0)
+        self.classic_progress_label.setText("0%")
+        self.latest_classic_output_paths = []
+        self.classic_open_button.setEnabled(False)
+        self.classic_log.clear()
+        for k in ["movies", "lines", "pages"]:
+            self.classic_stat_labels[k].setText("0")
+        self.classic_stat_labels["output"].setText("-")
+        self.classic_stat_labels["output"].setToolTip("")
 
     # ── Parser Flow ───────────────────────────────────────────────────
 

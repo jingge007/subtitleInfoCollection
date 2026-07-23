@@ -1,0 +1,32 @@
+---
+description: Python 分层、命名、错误与 GUI/Worker 约定
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python 架构与风格
+
+- Python ≥3.12；文件顶部 `from __future__ import annotations`。
+- 包内相对导入；测试用 `subtitle_info_collection.*` 绝对导入。
+- 类 PascalCase；函数/变量 snake_case；常量 UPPER_SNAKE_CASE；私有 `_` 前缀。
+- 数据类优先 `@dataclass(slots=True)`；类型用 `X | None`。
+- GUI/Worker Signal 载荷 dict 键用 camelCase；Python 字段用 snake_case。
+- docstring 与用户可见日志/错误用简体中文；新增或修改的函数上一行加中文 `#` 注释说明意图。
+- Ruff：`line-length = 100`。
+
+## 分层
+
+- `adapters/`：外部 API/站点；实现 `ProviderAdapter`。
+- `engines/`：解码、打分、解压、OCR 等可单测逻辑。
+- `gui/`：仅 UI；后台任务经 `gui/worker.py`（QThread + `asyncio.run`）。
+- 采集主流程变更走 `SubtitleCollectionOrchestrator`。
+- 33 台词等放 `automation/`，与采集解耦。
+- GUI 禁止直接调用 httpx / Playwright。
+
+## 错误
+
+- 业务异常用 `CollectorError`，设置 `error_type` 与 `provider`。
+- 新错误类型同步更新 `ERROR_TYPE_LABELS`。
+- 未知异常用 `classify_exception()`。
+
+权威摘要见 `AGENTS.md`。

@@ -8,7 +8,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from ..automation import TodaysLinesAutomationOptions, TodaysLinesAutomationRunner
+from ..automation import (
+    ClassicLinesAutomationOptions,
+    ClassicLinesAutomationRunner,
+    TodaysLinesAutomationOptions,
+    TodaysLinesAutomationRunner,
+)
 from ..errors import VerificationResult
 from ..local_parser import (parse_local_subtitle_file, write_movie_export_files, write_movie_search_index_file, write_subtitle_export_files)
 from ..models import TaskConfig
@@ -181,6 +186,7 @@ class ParserWorker(QThread):
 
 class AutomationScriptWorker(QThread):
     log_message = Signal(str)
+    progress_changed = Signal(int, int, str)
     finished_success = Signal(dict)
     finished_error = Signal(str)
 
@@ -204,6 +210,7 @@ class AutomationScriptWorker(QThread):
                     unicloud_import_format=self.unicloud_import_format,
                 ),
                 log=self.log_message.emit,
+                progress=lambda c, t, n: self.progress_changed.emit(c, t, n),
             )
             result = await runner.run()
             self.finished_success.emit(
@@ -229,3 +236,47 @@ class AutomationScriptWorker(QThread):
             asyncio.run(_run())
         except Exception as exc:  # noqa: BLE001
             self.finished_error.emit(str(exc))
+
+
+class ClassicLinesAutomationWorker(QThread):
+    log_message = Signal(str)
+    progress_changed = Signal(int, int, str)
+    finished_success = Signal(dict)
+    finished_error = Signal(str)
+
+    # 仅接收 uniCloud 开关；其余爬取参数使用内部默认
+    def __init__(
+        self,
+        data_dir: Path,
+        *,
+        unicloud_import_format: bool = True,
+    ) -> None:
+        super().__init__()
+        self.data_dir = data_dir
+        self.unicloud_import_format = unicloud_import_format
+
+    # 在后台线程执行经典台词全量爬取
+    def run(self) -> None:
+        async def _run() -> None:
+            # 默认全量采集：并发 8、无请求间隔、无页数上限
+            options = ClassicLinesAutomationOptions(
+                data_dir=self.data_dir,
+                unicloud_import_format=self.unicloud_import_format,
+                request_delay_seconds=0.0,
+                concurrency=8,
+                max_pages=None,
+                headless=True,
+            )
+            runner = ClassicLinesAutomationRunner(
+                options,
+                log=self.log_message.emit,
+                progress=lambda c, t, n: self.progress_changed.emit(c, t, n),
+            )
+            result = await runner.run()
+            self.finished_success.emit(result.to_dict())
+
+        try:
+            asyncio.run(_run())
+        except Exception as exc:
+            self.finished_error.emit(str(exc))
+

@@ -1,0 +1,28 @@
+---
+description: 完成或交付改动前必须自动跑相关 pytest
+alwaysApply: true
+---
+
+# 测试验证（强制）
+
+修改源码、实现或交付需求时，**完成前必须自动执行相关 pytest**，禁止跳过或仅口头声称通过。
+
+## 执行要求
+
+1. 有明确对应测试文件 → `python -m pytest tests/test_<相关>.py -q`
+2. 改动面广或无单一对应 → `python -m pytest -q`
+3. 失败 → 修复 → 重跑至通过
+4. 向用户汇报时附带测试结果（通过数或失败摘要）
+5. 仅改文档/规则且不影响可测代码 → 说明「无需跑测」及原因
+
+## 改动与测试映射（示例）
+
+| 改动范围 | 优先跑的测试 |
+|----------|----------------|
+| `automation/` | `tests/test_classic_lines.py`、`tests/test_todays_lines*.py` 等对应文件 |
+| `adapters/`、provider | `tests/test_*_provider.py` |
+| `engines/` | `tests/test_*engine*.py` 或对应模块测试 |
+| `config.py` / `.env.example` | `tests/test_config_checks.py` |
+| 跨多模块或不确定 | `python -m pytest -q` |
+
+权威摘要见仓库根目录 `AGENTS.md`「测试与运行」。
