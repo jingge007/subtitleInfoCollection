@@ -8,9 +8,9 @@ from subtitle_info_collection.models import MovieInfo
 def movie() -> MovieInfo:
     return MovieInfo(
         movie_id="tmdb-278",
-        title="The Shawshank Redemption",
-        original_title="The Shawshank Redemption",
-        title_zh="肖申克的救赎",
+        title="Shawshank",
+        original_title="Shawshank",
+        title_zh="Shawshank",
         year=1994,
     )
 

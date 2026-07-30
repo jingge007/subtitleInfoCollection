@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 from typing import Callable
 
@@ -10,6 +11,8 @@ from ..models import MovieInfo
 
 DEFAULT_TMDB_BASE_URLS = ["https://api.tmdb.org/3", "https://api.themoviedb.org/3"]
 TMDB_PAGE_SIZE = 20
+# 单页中文详情并发上限
+_ZH_DETAIL_CONCURRENCY = 8
 
 
 class TmdbClient:
@@ -52,6 +55,16 @@ class TmdbClient:
     ) -> list[MovieInfo]:
         pages = math.ceil(limit / TMDB_PAGE_SIZE)
         movies: list[MovieInfo] = []
+        detail_sem = asyncio.Semaphore(_ZH_DETAIL_CONCURRENCY)
+
+        # 拉取单部电影的中文详情（受并发信号量限制）
+        async def fetch_zh_detail(raw: dict) -> dict:
+            async with detail_sem:
+                try:
+                    return await self._request_json(f"/movie/{raw['id']}", {"language": "zh-CN"})
+                except Exception as exc:  # noqa: BLE001
+                    log and log(f"中文信息获取失败：{raw.get('title') or raw.get('id')} | {exc}")
+                    return {}
 
         for page in range(1, pages + 1):
             log and log(f"获取 TMDb 电影：{year} 第 {page}/{pages} 页")
@@ -66,12 +79,9 @@ class TmdbClient:
                     "page": page,
                 },
             )
-            for raw in payload.get("results", []):
-                zh_payload: dict = {}
-                try:
-                    zh_payload = await self._request_json(f"/movie/{raw['id']}", {"language": "zh-CN"})
-                except Exception as exc:  # noqa: BLE001
-                    log and log(f"中文信息获取失败：{raw.get('title') or raw.get('id')} | {exc}")
+            page_results = list(payload.get("results", []))
+            zh_payloads = await asyncio.gather(*(fetch_zh_detail(raw) for raw in page_results))
+            for raw, zh_payload in zip(page_results, zh_payloads, strict=True):
                 movie = MovieInfo.from_tmdb(raw, zh_payload)
                 if movie.year == year:
                     movies.append(movie)

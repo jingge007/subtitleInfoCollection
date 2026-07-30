@@ -36,7 +36,7 @@ class AssrtProvider:
         self,
         token: str = "",
         base_url: str = "https://api.assrt.net/v1",
-        request_interval_ms: int = 13_000,
+        request_interval_ms: int = 500,
         timeout: float = 30,
         proxy: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,

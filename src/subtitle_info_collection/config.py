@@ -14,9 +14,12 @@ except ImportError:  # pragma: no cover
 
 DEFAULT_PROVIDER_PRIORITY = ["subhd", "subdl", "assrt", "opensubtitles"]
 DEFAULT_REQUEST_INTERVAL_MS = 8_000
+DEFAULT_MOVIE_CONCURRENCY = 2
 DEFAULT_MIN_BILINGUAL_RATIO = 0.70
 DEFAULT_SUBHD_SEARCH_TIMEOUT = 60
 DEFAULT_PROVIDER_SEARCH_TIMEOUT = 45
+# ASSRT 适配器内部短间隔：长间隔由编排器按源分桶负责
+ASSRT_INTERNAL_INTERVAL_MS = 500
 PROVIDER_LABELS = {
     "subhd": "SubHD",
     "subdl": "SubDL",
@@ -122,6 +125,7 @@ class ConfigCheckResult:
     data_dir_exists: bool
     tmdb_configured: bool
     request_interval_ms: int
+    movie_concurrency: int
     providers: list[ProviderConfigStatus]
     proxies_configured: bool
     warnings: list[str]
@@ -240,6 +244,7 @@ def evaluate_config(
         data_dir_exists=settings.data_dir.exists(),
         tmdb_configured=bool(settings.tmdb_token.strip()),
         request_interval_ms=settings.request_interval_ms,
+        movie_concurrency=settings.movie_concurrency,
         providers=provider_statuses,
         proxies_configured=bool(settings.http_proxy.strip() or settings.https_proxy.strip()),
         warnings=warnings,
@@ -272,6 +277,7 @@ class AppSettings:
     provider_priority: list[str] = field(default_factory=lambda: list(DEFAULT_PROVIDER_PRIORITY))  # 字幕源优先级
     provider_disabled: list[str] = field(default_factory=list)  # 禁用的字幕源
     request_interval_ms: int = DEFAULT_REQUEST_INTERVAL_MS  # 请求间隔（毫秒）
+    movie_concurrency: int = DEFAULT_MOVIE_CONCURRENCY  # 同时处理的电影数
     http_proxy: str = ""  # HTTP代理
     https_proxy: str = ""  # HTTPS代理
 
@@ -307,6 +313,13 @@ class AppSettings:
             request_interval_ms=max(
                 12_000,
                 parse_int(os.getenv("SUBTITLE_REQUEST_INTERVAL_MS"), DEFAULT_REQUEST_INTERVAL_MS),
+            ),
+            movie_concurrency=max(
+                1,
+                min(
+                    4,
+                    parse_int(os.getenv("SUBTITLE_MOVIE_CONCURRENCY"), DEFAULT_MOVIE_CONCURRENCY),
+                ),
             ),
             subhd_captcha_ocr_enabled=parse_bool(os.getenv("SUBHD_CAPTCHA_OCR_ENABLED"), True),
             subhd_captcha_auto_submit_min_confidence=max(

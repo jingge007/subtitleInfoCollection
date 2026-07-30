@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 from urllib.parse import quote, unquote, urljoin, urlparse
@@ -14,7 +15,14 @@ from ..engines.subtitle_engine import detect_subtitle_format
 from ..models import DownloadedPayload, MovieInfo, SubtitleCandidate, format_chinese_description
 from .base import DownloadContext, LogCallback, ProviderHealth
 
-DEFAULT_BASE_URLS = ["https://subhd.tv", "https://subhd.cc", "https://subhd.me", "https://subhd.la"]
+# 主域名 subhd.tv；备用 me / one；其余作末位回退
+DEFAULT_BASE_URLS = [
+    "https://subhd.tv",
+    "https://subhd.me",
+    "https://subhd.one",
+    "https://subhd.cc",
+    "https://subhd.la",
+]
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -60,6 +68,7 @@ API_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Content-Type": "application/json",
+    "X-Requested-With": "XMLHttpRequest",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-origin",
@@ -81,11 +90,22 @@ _CF_CHALLENGE_MARKERS = [
 
 _CAPTCHA_REFRESH = "__SUBHD_REFRESH_CAPTCHA__"
 _MIN_SEARCH_FILE_SIZE_KB = 100.0
+_EXPIRED_PAGE_MARKERS = (
+    "时间过长本临时页面已经失效",
+    "临时页面已经失效",
+    "下载页面已失效",
+    "本临时下载页面已经失效",
+)
 
 
 def _is_cloudflare_challenge_page(html_text: str) -> bool:
     lower = html_text.lower()
     return any(marker.lower() in lower for marker in _CF_CHALLENGE_MARKERS)
+
+
+# 判断页面或 API 文案是否表示下载临时页已失效
+def _is_expired_temp_page_text(text: str) -> bool:
+    return any(marker in (text or "") for marker in _EXPIRED_PAGE_MARKERS)
 
 
 def _stealth_script() -> str:
@@ -144,6 +164,8 @@ class SubhdProvider:
             self._playwright_instance = None
 
     async def _ensure_browser(self) -> None:
+        # browser/context 在整次采集任务内复用；仅在未创建或已断开时冷启动
+        # page 仍由各次搜索/下载按需 new_page，并在 finally 中 close（page 便宜，browser 贵）
         if self._browser is None or not self._browser.is_connected():
             if self._browser:
                 try:
@@ -151,10 +173,11 @@ class SubhdProvider:
                 except Exception:
                     pass
             from playwright.async_api import async_playwright
+            logger.info("SubHD Playwright 冷启动浏览器")
             self._playwright_instance = await async_playwright().start()
-            self._browser = await self._playwright_instance.chromium.launch(
-                headless=True,
-                args=[
+            launch_kwargs: dict[str, object] = {
+                "headless": True,
+                "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--disable-features=IsolateOrigins,site-per-process",
                     "--disable-infobars",
@@ -163,7 +186,10 @@ class SubhdProvider:
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                 ],
-            )
+            }
+            if self.proxy:
+                launch_kwargs["proxy"] = {"server": self.proxy}
+            self._browser = await self._playwright_instance.chromium.launch(**launch_kwargs)
             self._browser_context = await self._browser.new_context(
                 user_agent=USER_AGENT,
                 accept_downloads=True,
@@ -171,6 +197,398 @@ class SubhdProvider:
                 locale="zh-CN",
                 timezone_id="Asia/Shanghai",
             )
+        else:
+            logger.info("SubHD Playwright 复用已有浏览器")
+
+    # 将 Playwright context 中的 cookie 合并进共享 jar，供 httpx 下载 API 使用
+    async def _sync_playwright_cookies_to_shared(self) -> None:
+        if not self._browser_context:
+            return
+        try:
+            cookies = await self._browser_context.cookies()
+            for item in cookies:
+                name = str(item.get("name") or "")
+                value = str(item.get("value") or "")
+                if not name:
+                    continue
+                self._shared_cookies.set(
+                    name,
+                    value,
+                    domain=str(item.get("domain") or ""),
+                    path=str(item.get("path") or "/"),
+                )
+            logger.info("SubHD Playwright cookies synced, count=%d", len(cookies))
+        except Exception as exc:
+            logger.info("SubHD Playwright cookie sync failed: %s", exc)
+
+    # 用浏览器打开同域 /down，过 CF 后把 cookie 写回共享 jar（仅预热，不调下载 API）
+    async def _warm_down_via_playwright(
+        self,
+        base_url: str,
+        subtitle_id: str,
+        context: DownloadContext | None = None,
+    ) -> bool:
+        page = None
+        try:
+            page = await self._open_down_page_via_playwright(base_url, subtitle_id, context)
+            if page is None:
+                return False
+            await self._sync_playwright_cookies_to_shared()
+            return True
+        except Exception as exc:
+            logger.info("SubHD Playwright down warm failed: %s", exc)
+            return False
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+    # 打开详情页 → prepare-download → /down，返回仍打开的 page；失败返回 None
+    async def _open_down_page_via_playwright(
+        self,
+        base_url: str,
+        subtitle_id: str,
+        context: DownloadContext | None = None,
+    ):
+        try:
+            import importlib.util
+            if importlib.util.find_spec("playwright") is None:
+                logger.info("SubHD Playwright not available for down page")
+                return None
+        except ImportError:
+            return None
+
+        await self._ensure_browser()
+        if not self._browser_context:
+            return None
+        if context and context.log:
+            context.log(f"SubHD Playwright 打开下载页建立会话：{base_url}")
+        page = await self._browser_context.new_page()
+        try:
+            await page.add_init_script(_stealth_script())
+            detail_url = f"{base_url}/a/{subtitle_id}"
+            html = await self._navigate_with_challenge_handling(
+                page, detail_url, max_retries=2, wait_seconds=3
+            )
+            if not html or _is_cloudflare_challenge_page(html):
+                reason = "详情页 Cloudflare" if html else "详情页打开失败"
+                logger.info("SubHD Playwright %s: %s", reason, detail_url)
+                if context and context.log:
+                    context.log(f"SubHD Playwright {reason}：{base_url}")
+                await page.close()
+                return None
+
+            down_path = await self._prepare_download_via_playwright(base_url, subtitle_id, detail_url)
+            if not down_path:
+                if context and context.log:
+                    context.log(f"SubHD Playwright prepare-download 失败：{base_url}")
+                await page.close()
+                return None
+
+            down_url = urljoin(base_url + "/", down_path.lstrip("/"))
+            html = await self._navigate_with_challenge_handling(
+                page, down_url, max_retries=3, wait_seconds=3
+            )
+            if not html:
+                logger.info("SubHD Playwright /down navigate failed: %s", down_url)
+                if context and context.log:
+                    context.log(f"SubHD Playwright /down 打开失败：{base_url}")
+                await page.close()
+                return None
+            if _is_cloudflare_challenge_page(html):
+                logger.info("SubHD Playwright /down still Cloudflare: %s", down_url)
+                if context and context.log:
+                    context.log(f"SubHD Playwright /down 仍被 Cloudflare：{base_url}")
+                await page.close()
+                return None
+            if _is_expired_temp_page_text(html):
+                logger.info("SubHD Playwright /down still expired: %s", down_url)
+                if context and context.log:
+                    context.log(f"SubHD Playwright /down 仍显示临时页失效：{base_url}")
+                await page.close()
+                return None
+            return page
+        except Exception:
+            try:
+                await page.close()
+            except Exception:
+                pass
+            raise
+
+    # 在浏览器请求上下文中调用 prepare-download，返回 /down/... 路径
+    async def _prepare_download_via_playwright(
+        self,
+        base_url: str,
+        subtitle_id: str,
+        referer: str,
+    ) -> str | None:
+        if not self._browser_context:
+            return None
+        try:
+            resp = await self._browser_context.request.post(
+                f"{base_url}/api/sub/prepare-download",
+                data=json.dumps({"sid": subtitle_id}),
+                headers={
+                    **API_HEADERS,
+                    "Origin": base_url,
+                    "Referer": referer,
+                },
+            )
+            if not resp.ok:
+                logger.info(
+                    "SubHD Playwright prepare-download HTTP %s: %s",
+                    resp.status, base_url,
+                )
+                return None
+            data = await resp.json()
+            url = data.get("url") if isinstance(data, dict) else None
+            if data.get("success") and isinstance(url, str) and url.startswith("/down/"):
+                return url
+            logger.info("SubHD Playwright prepare-download rejected: %s", str(data)[:200])
+            return None
+        except Exception as exc:
+            logger.info("SubHD Playwright prepare-download failed: %s", exc)
+            return None
+
+    # 在浏览器会话内 POST /api/sub/down 并拉取文件（使用 request API，避免页内 fetch CORS）
+    async def _download_via_playwright_api(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        candidate: SubtitleCandidate,
+        context: DownloadContext,
+    ) -> list[DownloadedPayload] | None:
+        subtitle_id = candidate.provider_subtitle_id
+        page = None
+        try:
+            page = await self._open_down_page_via_playwright(base_url, subtitle_id, context)
+            if page is None:
+                return None
+            await self._sync_playwright_cookies_to_shared()
+            if context.log:
+                context.log(f"SubHD Playwright 调用下载 API：{base_url}")
+
+            down_url = page.url or f"{base_url}/down/{subtitle_id}"
+            captcha_code = ""
+            for attempt in range(3):
+                try:
+                    raw = await self._post_sub_down_via_playwright(
+                        base_url, subtitle_id, captcha_code, referer=down_url
+                    )
+                except Exception as exc:
+                    logger.info(
+                        "SubHD Playwright api/sub/down failed: base=%s, attempt=%d, exc=%s",
+                        base_url, attempt + 1, exc,
+                    )
+                    if context.log:
+                        context.log(f"SubHD Playwright API 调用失败（{base_url}）：{exc}")
+                    return None
+
+                if not isinstance(raw, dict):
+                    logger.info("SubHD Playwright api/sub/down unexpected raw: %s", str(raw)[:200])
+                    return None
+                if not raw.get("ok"):
+                    logger.info(
+                        "SubHD Playwright api/sub/down HTTP %s: %s",
+                        raw.get("status"), str(raw.get("data"))[:200],
+                    )
+                    if context.log:
+                        context.log(
+                            f"SubHD Playwright API HTTP {raw.get('status')}（{base_url}）"
+                        )
+                    return None
+
+                data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+                payloads = await self._consume_sub_down_api_result(
+                    client,
+                    base_url,
+                    candidate,
+                    context,
+                    data,
+                    captcha_code,
+                    attempt,
+                    download_file=self._download_file_via_playwright,
+                )
+                # None=失败；非空=成功；空列表=需带验证码重试
+                if payloads is None:
+                    return None
+                if payloads:
+                    return payloads
+                next_cap = getattr(self, "_pending_captcha_code", None)
+                if next_cap is None:
+                    return None
+                captcha_code = "" if next_cap == _CAPTCHA_REFRESH else next_cap
+                self._pending_captcha_code = None
+                continue
+            return None
+        except Exception as exc:
+            logger.info("SubHD Playwright download failed: %s", exc)
+            if context.log:
+                context.log(f"SubHD Playwright 下载失败（{base_url}）：{exc}")
+            return None
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+    # 用 Playwright 请求上下文 POST /api/sub/down
+    async def _post_sub_down_via_playwright(
+        self,
+        base_url: str,
+        subtitle_id: str,
+        captcha_code: str,
+        referer: str,
+    ) -> dict:
+        if not self._browser_context:
+            return {"ok": False, "status": 0, "data": {"success": False, "msg": "no browser"}}
+        resp = await self._browser_context.request.post(
+            f"{base_url}/api/sub/down",
+            data=json.dumps({"sid": subtitle_id, "cap": captcha_code}),
+            headers={
+                **API_HEADERS,
+                "Origin": base_url,
+                "Referer": referer,
+            },
+        )
+        try:
+            data = await resp.json()
+        except Exception:
+            text = await resp.text()
+            data = {"success": False, "msg": (text or "")[:200]}
+        return {"ok": resp.ok, "status": resp.status, "data": data}
+
+    # 用 Playwright 请求上下文下载文件内容
+    async def _download_file_via_playwright(self, dl_url: str, base_url: str) -> tuple[bytes, str, str] | None:
+        if not self._browser_context:
+            return None
+        try:
+            resp = await self._browser_context.request.get(
+                dl_url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "*/*",
+                    "Referer": base_url,
+                },
+            )
+            if not resp.ok:
+                logger.info("SubHD Playwright file download HTTP %s: %s", resp.status, dl_url)
+                return None
+            content = await resp.body()
+            headers = resp.headers
+            return (
+                content,
+                headers.get("content-disposition", "") or "",
+                headers.get("content-type", "") or "",
+            )
+        except Exception as exc:
+            logger.info("SubHD Playwright file download failed: %s", exc)
+            return None
+
+    # 解析 /api/sub/down 结果：成功则下载文件；验证码则写入 _pending_captcha_code 并返回 [] 表示重试
+    async def _consume_sub_down_api_result(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        candidate: SubtitleCandidate,
+        context: DownloadContext,
+        data: dict,
+        captcha_code: str,
+        attempt: int,
+        download_file,
+    ) -> list[DownloadedPayload] | None:
+        self._pending_captcha_code = None
+        subtitle_id = candidate.provider_subtitle_id
+
+        if data.get("success") and data.get("pass") is False:
+            if getattr(self, "_ocr_auto_submitted", False):
+                self._ocr_auto_submitted = False
+                self._emit(
+                    "subhd.captcha.auto_retry",
+                    "SubHD OCR auto-submit failed, auto-refreshing",
+                    log=context.log,
+                    subtitle_id=subtitle_id,
+                )
+                self._pending_captcha_code = _CAPTCHA_REFRESH
+                return []
+            code = await self._handle_captcha(client, base_url, candidate, context, data)
+            if code == _CAPTCHA_REFRESH:
+                self._emit(
+                    "subhd.captcha.refresh",
+                    "SubHD captcha refresh",
+                    log=context.log,
+                    subtitle_id=subtitle_id,
+                    attempt=str(attempt + 1),
+                )
+                self._ocr_auto_submitted = False
+                self._pending_captcha_code = _CAPTCHA_REFRESH
+                return []
+            if not code:
+                self._emit(
+                    "subhd.captcha.empty_cancel",
+                    "SubHD captcha cancelled",
+                    log=context.log,
+                    subtitle_id=subtitle_id,
+                )
+                return None
+            masked = code[0] + "*" * (len(code) - 1) if len(code) > 1 else code
+            self._emit(
+                "subhd.captcha.api_submit",
+                "SubHD captcha submitted",
+                log=context.log,
+                subtitle_id=subtitle_id,
+                code_masked=masked,
+                attempt=str(attempt + 1),
+            )
+            self._pending_captcha_code = code
+            return []
+
+        if data.get("success") and data.get("url"):
+            dl_url = data["url"]
+            if captcha_code:
+                logger.info("SubHD 验证码验证成功")
+            logger.info("SubHD api/sub/down got url: %s", dl_url)
+            file_result = await download_file(dl_url, base_url)
+            if not file_result:
+                return None
+            content, content_disposition, content_type = file_result
+            if not self._is_valid_download_content(content):
+                logger.info(
+                    "SubHD download content is not a valid subtitle payload, size=%d",
+                    len(content) if content else 0,
+                )
+                return None
+            file_name = self._download_file_name(dl_url, candidate, content_disposition)
+            logger.info("SubHD download success: size=%d, file=%s", len(content), file_name)
+            return [DownloadedPayload(
+                file_name=file_name,
+                content=content,
+                source_url=dl_url,
+                content_type=content_type or self._content_type_for_file_name(file_name),
+            )]
+
+        if not data.get("success"):
+            server_msg = str(data.get("msg") or str(data)[:200])
+            if self._api_response_has_captcha(data):
+                logger.info("SubHD 验证码验证失败: %s", server_msg)
+                code = await self._handle_captcha(client, base_url, candidate, context, data)
+                if code == _CAPTCHA_REFRESH:
+                    self._pending_captcha_code = _CAPTCHA_REFRESH
+                    return []
+                if not code:
+                    return None
+                self._pending_captcha_code = code
+                return []
+            logger.info("SubHD api/sub/down 请求失败 (第 %d 次尝试): %s", attempt + 1, server_msg)
+            if context.log:
+                context.log(f"SubHD API 拒绝下载（{base_url}）：{server_msg[:200]}")
+            return None
+
+        logger.info("SubHD api/sub/down unexpected response: %s", str(data)[:200])
+        return None
 
     async def health(self) -> ProviderHealth:
         return ProviderHealth(self.id, enabled=True, healthy=True)
@@ -184,7 +602,7 @@ class SubhdProvider:
         page,
         url: str,
         max_retries: int = 3,
-        wait_seconds: int = 5,
+        wait_seconds: int = 3,
     ) -> str | None:
         for attempt in range(max_retries):
             try:
@@ -223,6 +641,7 @@ class SubhdProvider:
         return await self._search_via_playwright(movie, keywords)
 
     async def _search_via_httpx(self, movie: MovieInfo, keywords: list[str]) -> list[SubtitleCandidate]:
+        # 串行探测域名：并发多域名会把 CF cookie 写入共享 jar，导致后续下载 API 全失败
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
             follow_redirects=True,
@@ -232,32 +651,51 @@ class SubhdProvider:
         ) as client:
             for base_url in self.base_urls:
                 for keyword in keywords:
-                    try:
-                        search_url = f"{base_url}/search/{quote(keyword)}"
-                        logger.info("SubHD httpx search: %s", search_url)
-                        resp = await client.get(search_url)
-                        if resp.status_code != 200:
-                            logger.info("SubHD httpx search HTTP %d: %s", resp.status_code, search_url)
-                            continue
-                        html_text = resp.text
-                        if _is_cloudflare_challenge_page(html_text):
-                            logger.info("SubHD httpx search blocked by Cloudflare: %s", search_url)
-                            continue
-                        items = self._parse_search_results_page(html_text, movie, base_url)
-                        if items:
-                            logger.info("SubHD httpx search hits, candidates=%d, keyword=%s", len(items), keyword)
-                            await self._enrich_candidates_with_detail_pages(client, items, BROWSER_HEADERS)
-                            for item in items:
-                                item.description = format_chinese_description(
-                                    ("搜索关键词", keyword),
-                                    ("字幕信息", item.description),
-                                )
-                            return items
-                        logger.info("SubHD httpx search no match: keyword=%s, base=%s", keyword, base_url)
-                    except Exception as exc:
-                        logger.info("SubHD httpx search failed: keyword=%s, base=%s, exc=%s", keyword, base_url, exc)
+                    items = await self._httpx_search_one_base(client, movie, keyword, base_url)
+                    if not items:
                         continue
+                    await self._enrich_candidates_with_detail_pages(client, items, BROWSER_HEADERS)
+                    for item in items:
+                        item.description = format_chinese_description(
+                            ("搜索关键词", keyword),
+                            ("字幕信息", item.description),
+                        )
+                    return items
         return []
+
+    # 在单个 base_url 上执行一次 httpx 搜索并解析候选
+    async def _httpx_search_one_base(
+        self,
+        client: httpx.AsyncClient,
+        movie: MovieInfo,
+        keyword: str,
+        base_url: str,
+    ) -> list[SubtitleCandidate] | None:
+        try:
+            search_url = f"{base_url}/search/{quote(keyword)}"
+            logger.info("SubHD httpx search: %s", search_url)
+            resp = await client.get(search_url)
+            if resp.status_code != 200:
+                logger.info("SubHD httpx search HTTP %d: %s", resp.status_code, search_url)
+                return None
+            html_text = resp.text
+            if _is_cloudflare_challenge_page(html_text):
+                logger.info("SubHD httpx search blocked by Cloudflare: %s", search_url)
+                return None
+            items = self._parse_search_results_page(html_text, movie, base_url)
+            if items:
+                logger.info(
+                    "SubHD httpx search hits, candidates=%d, keyword=%s, base=%s",
+                    len(items),
+                    keyword,
+                    base_url,
+                )
+                return items
+            logger.info("SubHD httpx search no match: keyword=%s, base=%s", keyword, base_url)
+            return None
+        except Exception as exc:
+            logger.info("SubHD httpx search failed: keyword=%s, base=%s, exc=%s", keyword, base_url, exc)
+            return None
 
     async def _search_via_playwright(self, movie: MovieInfo, keywords: list[str]) -> list[SubtitleCandidate]:
         try:
@@ -696,8 +1134,12 @@ class SubhdProvider:
                     cookies=self._shared_cookies,
                     proxy=self.proxy,
                 ) as client:
+                    # 可选搜索预热，失败忽略（与历史可用实现一致）
                     try:
-                        warmup_url = f"{base_url}/search/{quote(candidate.movie_title_zh or candidate.movie_title or '')}"
+                        warmup_url = (
+                            f"{base_url}/search/"
+                            f"{quote(candidate.movie_title_zh or candidate.movie_title or '')}"
+                        )
                         await client.get(warmup_url)
                     except Exception:
                         pass
@@ -718,6 +1160,69 @@ class SubhdProvider:
         logger.info("SubHD ALL download paths failed: id=%s", candidate.provider_subtitle_id)
         raise CollectorError("SubHD 所有下载路径均失败", ErrorType.DOWNLOAD_FAILED, self.id)
 
+    # 尽力 GET 同域 /down 建立会话；返回页面正文供判断 CF/失效
+    async def _touch_down_page(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        subtitle_id: str,
+        down_path: str | None = None,
+    ) -> str:
+        path = down_path or f"/down/{subtitle_id}"
+        if not path.startswith("/"):
+            path = "/" + path
+        down_url = urljoin(base_url + "/", path.lstrip("/"))
+        try:
+            resp = await client.get(down_url, headers={**BROWSER_HEADERS, "Referer": f"{base_url}/"})
+            return resp.text or ""
+        except Exception as exc:
+            logger.info("SubHD /down/ warmup failed: %s, exc=%s", down_url, exc)
+            return ""
+
+    # 先打开详情页再 prepare-download，创建临时 /down 会话并返回路径
+    async def _prepare_download_session(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        subtitle_id: str,
+        context: DownloadContext | None = None,
+    ) -> str | None:
+        detail_url = f"{base_url}/a/{subtitle_id}"
+        try:
+            await client.get(detail_url, headers={**BROWSER_HEADERS, "Referer": f"{base_url}/"})
+        except Exception as exc:
+            logger.info("SubHD detail warmup failed: %s, exc=%s", detail_url, exc)
+
+        try:
+            resp = await client.post(
+                f"{base_url}/api/sub/prepare-download",
+                json={"sid": subtitle_id},
+                headers={
+                    **API_HEADERS,
+                    "Origin": base_url,
+                    "Referer": detail_url,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.info("SubHD prepare-download failed: base=%s, exc=%s", base_url, exc)
+            if context and context.log:
+                context.log(f"SubHD prepare-download 失败（{base_url}）：{exc}")
+            return None
+
+        url = data.get("url") if isinstance(data, dict) else None
+        if data.get("success") and isinstance(url, str) and url.startswith("/down/"):
+            if context and context.log:
+                context.log(f"SubHD prepare-download 成功：{base_url}")
+            return url
+
+        msg = str((data or {}).get("msg") or data)[:200]
+        logger.info("SubHD prepare-download rejected: base=%s, msg=%s", base_url, msg)
+        if context and context.log:
+            context.log(f"SubHD prepare-download 拒绝（{base_url}）：{msg}")
+        return None
+
     async def _download_via_api(
         self,
         client: httpx.AsyncClient,
@@ -725,20 +1230,52 @@ class SubhdProvider:
         candidate: SubtitleCandidate,
         context: DownloadContext,
     ) -> list[DownloadedPayload] | None:
+        subtitle_id = candidate.provider_subtitle_id
+        # 新站流程：详情页 → prepare-download → /down → /api/sub/down
+        down_path = await self._prepare_download_session(client, base_url, subtitle_id, context)
+        if not down_path:
+            if context.log:
+                context.log(f"SubHD httpx prepare 失败，改用浏览器下载：{base_url}")
+            return await self._download_via_playwright_api(client, base_url, candidate, context)
+
+        down_url = urljoin(base_url + "/", down_path.lstrip("/"))
         headers = {
             **API_HEADERS,
             "Origin": base_url,
-            "Referer": f"{base_url}/down/{candidate.provider_subtitle_id}",
+            "Referer": down_url,
         }
-        down_url = candidate.download_url or f"{base_url}/down/{candidate.provider_subtitle_id}"
-        try:
-            await client.get(down_url, headers={**BROWSER_HEADERS, "Referer": f"{base_url}/"})
-        except Exception as exc:
-            logger.info("SubHD /down/ warmup failed: %s", exc)
+
+        down_html = await self._touch_down_page(client, base_url, subtitle_id, down_path=down_path)
+        # prepare 后 /down 仍被 CF 或失效页拦截时，改走浏览器完整流程
+        if _is_cloudflare_challenge_page(down_html) or _is_expired_temp_page_text(down_html):
+            if context.log:
+                context.log(f"SubHD httpx /down 不可用，改用浏览器下载：{base_url}")
+            return await self._download_via_playwright_api(client, base_url, candidate, context)
+
+        async def _httpx_download_file(dl_url: str, referer_base: str) -> tuple[bytes, str, str] | None:
+            try:
+                download_resp = await client.get(
+                    dl_url,
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        "Accept": "*/*",
+                        "Referer": referer_base,
+                    },
+                )
+                download_resp.raise_for_status()
+                return (
+                    download_resp.content,
+                    download_resp.headers.get("content-disposition", ""),
+                    download_resp.headers.get("content-type", ""),
+                )
+            except Exception as exc:
+                logger.info("SubHD download file failed: %s", exc)
+                return None
 
         captcha_code = ""
+        playwright_download_tried = False
         for attempt in range(3):
-            body = {"sid": candidate.provider_subtitle_id, "cap": captcha_code}
+            body = {"sid": subtitle_id, "cap": captcha_code}
             try:
                 resp = await client.post(
                     f"{base_url}/api/sub/down",
@@ -749,65 +1286,71 @@ class SubhdProvider:
                 data = resp.json()
             except Exception as exc:
                 logger.info("SubHD api/sub/down failed: base=%s, attempt=%d, exc=%s", base_url, attempt + 1, exc)
+                if context.log:
+                    context.log(f"SubHD API 下载请求失败（{base_url}）：{exc}")
+                if not playwright_download_tried:
+                    playwright_download_tried = True
+                    if context.log:
+                        context.log(f"SubHD httpx API 失败，改用浏览器下载：{base_url}")
+                    return await self._download_via_playwright_api(
+                        client, base_url, candidate, context
+                    )
                 return None
 
             if data.get("success") and data.get("pass") is False:
-                # OCR auto-retry: if last auto-submit failed, refresh once before re-prompting
                 if getattr(self, "_ocr_auto_submitted", False):
                     self._ocr_auto_submitted = False
-                    self._emit("subhd.captcha.auto_retry", "SubHD OCR auto-submit failed, auto-refreshing", log=context.log, subtitle_id=candidate.provider_subtitle_id)
+                    self._emit(
+                        "subhd.captcha.auto_retry",
+                        "SubHD OCR auto-submit failed, auto-refreshing",
+                        log=context.log,
+                        subtitle_id=subtitle_id,
+                    )
                     captcha_code = _CAPTCHA_REFRESH
                 else:
                     captcha_code = await self._handle_captcha(client, base_url, candidate, context, data)
                 if captcha_code == _CAPTCHA_REFRESH:
-                    self._emit("subhd.captcha.refresh", "SubHD captcha refresh", log=context.log, subtitle_id=candidate.provider_subtitle_id, attempt=str(attempt + 1))
+                    self._emit(
+                        "subhd.captcha.refresh",
+                        "SubHD captcha refresh",
+                        log=context.log,
+                        subtitle_id=subtitle_id,
+                        attempt=str(attempt + 1),
+                    )
                     captcha_code = ""
                     self._ocr_auto_submitted = False
                     continue
                 if not captcha_code:
-                    self._emit("subhd.captcha.empty_cancel", "SubHD captcha cancelled", log=context.log, subtitle_id=candidate.provider_subtitle_id)
+                    self._emit(
+                        "subhd.captcha.empty_cancel",
+                        "SubHD captcha cancelled",
+                        log=context.log,
+                        subtitle_id=subtitle_id,
+                    )
                     return None
                 masked = captcha_code[0] + "*" * (len(captcha_code) - 1) if len(captcha_code) > 1 else captcha_code
-                self._emit("subhd.captcha.api_submit", "SubHD captcha submitted", log=context.log, subtitle_id=candidate.provider_subtitle_id, code_masked=masked, attempt=str(attempt + 1))
+                self._emit(
+                    "subhd.captcha.api_submit",
+                    "SubHD captcha submitted",
+                    log=context.log,
+                    subtitle_id=subtitle_id,
+                    code_masked=masked,
+                    attempt=str(attempt + 1),
+                )
                 continue
 
             if data.get("success") and data.get("url"):
-                dl_url = data["url"]
-                if captcha_code:
-                    logger.info("SubHD 验证码验证成功")
-                logger.info("SubHD api/sub/down got url: %s", dl_url)
-                try:
-                    download_resp = await client.get(
-                        dl_url,
-                        headers={
-                            "User-Agent": USER_AGENT,
-                            "Accept": "*/*",
-                            "Referer": base_url,
-                        },
-                    )
-                    download_resp.raise_for_status()
-                    content = download_resp.content
-                except Exception as exc:
-                    logger.info("SubHD download file failed: %s", exc)
-                    return None
-
-                if not self._is_valid_download_content(content):
-                    logger.info(
-                        "SubHD download content is not a valid subtitle payload, size=%d",
-                        len(content) if content else 0,
-                    )
-                    return None
-
-                content_disposition = download_resp.headers.get("content-disposition", "")
-                content_type = download_resp.headers.get("content-type", "")
-                file_name = self._download_file_name(dl_url, candidate, content_disposition)
-                logger.info("SubHD download success: size=%d, file=%s", len(content), file_name)
-                return [DownloadedPayload(
-                    file_name=file_name,
-                    content=content,
-                    source_url=dl_url,
-                    content_type=content_type or self._content_type_for_file_name(file_name),
-                )]
+                payloads = await self._consume_sub_down_api_result(
+                    client,
+                    base_url,
+                    candidate,
+                    context,
+                    data,
+                    captcha_code,
+                    attempt,
+                    download_file=_httpx_download_file,
+                )
+                return payloads if payloads else None
 
             if not data.get("success"):
                 server_msg = str(data.get("msg") or str(data)[:200])
@@ -815,6 +1358,15 @@ class SubhdProvider:
                     logger.info("SubHD 验证码验证失败: %s", server_msg)
                 else:
                     logger.info("SubHD api/sub/down 请求失败 (第 %d 次尝试): %s", attempt + 1, server_msg)
+                    if context.log:
+                        context.log(f"SubHD API 拒绝下载（{base_url}）：{server_msg[:200]}")
+                if _is_expired_temp_page_text(server_msg) and not playwright_download_tried:
+                    playwright_download_tried = True
+                    if context.log:
+                        context.log(f"SubHD 临时页失效，改用浏览器页内下载：{base_url}")
+                    return await self._download_via_playwright_api(
+                        client, base_url, candidate, context
+                    )
                 if not self._api_response_has_captcha(data):
                     return None
                 logger.info("SubHD 需要输入验证码 (第 %d 次尝试)", attempt + 1)
@@ -1100,6 +1652,24 @@ class SubhdProvider:
         return False
 
     @staticmethod
+    def _subtitle_text_head(content: bytes) -> str:
+        # 识别 UTF-16/UTF-8 字幕正文头部，供 ASS/SRT 特征匹配
+        if content.startswith(b"\xff\xfe") or content.startswith(b"\xfe\xff"):
+            try:
+                return content[:400].decode("utf-16").strip().lower()
+            except UnicodeDecodeError:
+                pass
+        if content.startswith(b"\xef\xbb\xbf"):
+            try:
+                return content[:400].decode("utf-8-sig").strip().lower()
+            except UnicodeDecodeError:
+                pass
+        text = content[:400].decode("utf-8", errors="ignore")
+        # 去掉错误按 UTF-8 解出的 NUL，兼容偶发 UTF-16 无 BOM
+        text = text.replace("\x00", "")
+        return text.strip().lower()
+
+    @staticmethod
     def _is_valid_download_content(content: bytes) -> bool:
         if not content or len(content) < 4:
             return False
@@ -1113,7 +1683,7 @@ class SubhdProvider:
             return True
         if content[:3] == b"\x1f\x8b\x08":
             return True
-        text_head = content[:200].decode("utf-8", errors="ignore").strip().lower()
+        text_head = SubhdProvider._subtitle_text_head(content)
         if text_head.startswith("[script info]") or text_head.startswith("\ufeff[script info]"):
             return True
         if re.match(r"\A\s*\d+\s*\n\d{1,2}:\d{2}:\d{2}", text_head):

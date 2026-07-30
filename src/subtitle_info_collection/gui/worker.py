@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from ..automation import (
 from ..errors import VerificationResult
 from ..local_parser import (parse_local_subtitle_file, write_movie_export_files, write_movie_search_index_file, write_subtitle_export_files)
 from ..models import TaskConfig
-from ..orchestrator import SubtitleCollectionOrchestrator
+from ..orchestrator import CollectionControl, SubtitleCollectionOrchestrator
 from ..storage import AppStorage
 
 
@@ -35,6 +36,23 @@ class CollectorWorker(QThread):
         self._verification_event = threading.Event()
         self._verification_code = ""
         self._verification_refresh = False
+        self._control = CollectionControl()
+
+    # 暂停采集：已在飞电影继续，后续电影等待
+    def pause_collection(self) -> None:
+        self._control.pause()
+        self.log_message.emit(f"[{datetime.now().strftime('%H:%M:%S')}] 已请求暂停采集")
+
+    # 继续采集
+    def resume_collection(self) -> None:
+        self._control.resume()
+        self.log_message.emit(f"[{datetime.now().strftime('%H:%M:%S')}] 已继续采集")
+
+    # 中止采集：未开始电影跳过，保留已完成结果
+    def abort_collection(self) -> None:
+        self._control.abort()
+        self._verification_event.set()
+        self.log_message.emit(f"[{datetime.now().strftime('%H:%M:%S')}] 已请求中止采集")
 
     def submit_verification(self, code: str) -> None:
         self._verification_code = code
@@ -62,7 +80,17 @@ class CollectorWorker(QThread):
                 "ocrMessage": request.ocr_message,
             }
         )
-        await asyncio.to_thread(self._verification_event.wait, 300)
+        # 分段等待，便于中止时提前结束验证码弹窗等待
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            if self._control.verification_should_stop():
+                return VerificationResult(code="")
+            if await asyncio.to_thread(self._verification_event.wait, 0.5):
+                break
+        else:
+            return VerificationResult(code="")
+        if self._control.verification_should_stop():
+            return VerificationResult(code="")
         if self._verification_refresh:
             return VerificationResult(refresh=True)
         return VerificationResult(code=self._verification_code)
@@ -79,6 +107,7 @@ class CollectorWorker(QThread):
                     str(payload.get("currentMovie") or ""),
                 ),
                 request_verification=self._request_verification,
+                control=self._control,
             )
             result = await orchestrator.run(self.config)
             self.finished_success.emit(result)

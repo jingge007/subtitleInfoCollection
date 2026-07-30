@@ -67,6 +67,7 @@ BAIDU_TRANSLATE_SECRET=
 SUBTITLE_PROVIDER_PRIORITY=subhd,subdl,assrt,opensubtitles
 SUBTITLE_PROVIDER_DISABLED=
 SUBTITLE_REQUEST_INTERVAL_MS=13000
+SUBTITLE_MOVIE_CONCURRENCY=2
 SUBTITLE_MIN_BILINGUAL_RATIO=0.70
 SUBHD_CAPTCHA_OCR_ENABLED=true
 SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE=0.85
@@ -99,7 +100,8 @@ HTTPS_PROXY=
 - `BAIDU_TRANSLATE_APP_ID` / `BAIDU_TRANSLATE_SECRET`：百度翻译开放平台凭证，用于自动化脚本补全英文字幕；留空则跳过英文补全。
 - `SUBTITLE_PROVIDER_PRIORITY`：字幕源搜索优先级，逗号分隔，支持 `subhd`、`subdl`、`assrt`、`opensubtitles`，越靠前越优先。
 - `SUBTITLE_PROVIDER_DISABLED`：禁用的字幕源，逗号分隔；留空表示不额外禁用。
-- `SUBTITLE_REQUEST_INTERVAL_MS`：字幕源请求间隔（毫秒），降低限流/验证码概率；过低值会被程序限制到安全下限。
+- `SUBTITLE_REQUEST_INTERVAL_MS`：字幕源请求间隔（毫秒），降低限流/验证码概率；过低值会被程序限制到安全下限（不低于 12000）。
+- `SUBTITLE_MOVIE_CONCURRENCY`：同时处理的电影数（1～4）；默认 `2` 为有限并发，`1` 为串行（旧行为）。
 - `SUBTITLE_MIN_BILINGUAL_RATIO`：下载后双语条目最低占比（0.0–1.0）；`0.70` 表示至少 70% 有效条目须同时含简体中文与英文。
 - `SUBHD_CAPTCHA_OCR_ENABLED`：是否启用 SubHD 验证码辅助识别；`true` 尝试自动识别，`false` 需人工输入。图片 OCR 需本机安装对应 OCR 依赖与 Tesseract。
 - `SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE`：验证码自动提交最低置信度（0.0–1.0）；低于该值等待人工确认。

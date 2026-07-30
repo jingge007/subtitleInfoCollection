@@ -5,12 +5,13 @@ import logging
 import ctypes
 import os
 import shutil
+import time
 import winsound
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QPainter, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -153,6 +154,13 @@ class MainWindow(FluentWindow):
         self._verification_refresh_btn: TransparentToolButton | None = None
         self._verification_code_input: LineEdit | None = None
         self._verification_ocr_label: CaptionLabel | None = None
+        self._collect_elapsed_ms = 0
+        self._collect_elapsed_running = False
+        self._collect_elapsed_last_tick: float | None = None
+        self._collect_paused = False
+        self._collect_elapsed_timer = QTimer(self)
+        self._collect_elapsed_timer.setInterval(1000)
+        self._collect_elapsed_timer.timeout.connect(self._tick_collect_elapsed)
 
         self.setWindowTitle("字幕采集工具")
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
@@ -538,6 +546,12 @@ class MainWindow(FluentWindow):
                 None,
             ),
             self._status_card(
+                "电影并发",
+                f"{self.config_check.movie_concurrency}",
+                "SUBTITLE_MOVIE_CONCURRENCY（1～4）",
+                None,
+            ),
+            self._status_card(
                 "代理",
                 "已启用" if self.config_check.proxies_configured else "未启用",
                 "HTTP_PROXY / HTTPS_PROXY",
@@ -689,6 +703,7 @@ class MainWindow(FluentWindow):
             ("OpenSubtitles", bool(os.environ.get("OPENSUBTITLES_API_KEY", "").strip()), "OpenSubtitles API 密钥"),
             ("HTTP_PROXY", bool(os.environ.get("HTTP_PROXY", "").strip() or os.environ.get("HTTPS_PROXY", "").strip()), "HTTP/HTTPS 代理"),
             ("请求间隔", True, f"{self.config_check.request_interval_ms} ms"),
+            ("电影并发", True, f"{self.config_check.movie_concurrency}"),
         ]
         for name, configured, desc in env_items:
             row_widget = CardWidget(self)
@@ -758,6 +773,18 @@ class MainWindow(FluentWindow):
         self.start_button.setFixedHeight(36)
         self.start_button.clicked.connect(self.start_collection)
         header.addWidget(self.start_button)
+        self.pause_button = PushButton("暂停", self)
+        self.pause_button.setIcon(FIF.PAUSE)
+        self.pause_button.setFixedHeight(36)
+        self.pause_button.setEnabled(False)
+        self.pause_button.clicked.connect(self.toggle_collect_pause)
+        header.addWidget(self.pause_button)
+        self.abort_button = PushButton("中止", self)
+        self.abort_button.setIcon(FIF.CANCEL)
+        self.abort_button.setFixedHeight(36)
+        self.abort_button.setEnabled(False)
+        self.abort_button.clicked.connect(self.abort_collection)
+        header.addWidget(self.abort_button)
 
         params_card = self._card("采集参数")
         params_layout = QVBoxLayout()
@@ -835,13 +862,20 @@ class MainWindow(FluentWindow):
         self.collect_progress_ring.setStrokeWidth(5)
         progress_info = QVBoxLayout()
         progress_info.setSpacing(3)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(12)
         self.collect_status = StrongBodyLabel("等待开始")
         self.collect_status.setStyleSheet(f"font-size: 15px; color: {TEXT};")
         self.collect_status.setWordWrap(True)
-        self.collect_status.setMinimumWidth(260)
+        self.collect_status.setMinimumWidth(200)
+        self.collect_elapsed_label = StrongBodyLabel("耗时 00:00:00")
+        self.collect_elapsed_label.setStyleSheet(f"font-size: 14px; color: {TEXT_SOFT};")
+        self.collect_elapsed_label.setMinimumWidth(120)
+        status_row.addWidget(self.collect_status, 1)
+        status_row.addWidget(self.collect_elapsed_label, 0, Qt.AlignRight | Qt.AlignVCenter)
         self.collect_progress_label = CaptionLabel("0%")
         self.collect_progress_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
-        progress_info.addWidget(self.collect_status)
+        progress_info.addLayout(status_row)
         progress_info.addWidget(self.collect_progress_label)
         progress_info.addStretch(1)
         progress_panel = QWidget(self)
@@ -1788,6 +1822,7 @@ class MainWindow(FluentWindow):
             download_enabled=self.download_check.isChecked(),
             subtitle_min_bilingual_ratio=env_settings.subtitle_min_bilingual_ratio,
             request_interval_ms=env_settings.request_interval_ms,
+            movie_concurrency=env_settings.movie_concurrency,
             output_root=data_dir / "output",
             tmdb_token=env_settings.tmdb_token,
             assrt_token=env_settings.assrt_token,
@@ -1815,7 +1850,14 @@ class MainWindow(FluentWindow):
         self.collect_progress_label.setText("0%")
         self.collect_status.setText("任务启动中")
         self.start_button.setEnabled(False)
+        self.pause_button.setEnabled(True)
+        self.pause_button.setText("暂停")
+        self.pause_button.setIcon(FIF.PAUSE)
+        self.abort_button.setEnabled(True)
+        self._collect_paused = False
         self._set_maintenance_enabled(False)
+        self._reset_collect_elapsed()
+        self._start_collect_elapsed()
         self.collector_worker = CollectorWorker(config, self.storage.database_path)
         self.collector_worker.log_message.connect(self.append_collect_log)
         self.collector_worker.progress_changed.connect(self.update_collect_progress)
@@ -1823,6 +1865,105 @@ class MainWindow(FluentWindow):
         self.collector_worker.finished_success.connect(self.collection_finished)
         self.collector_worker.finished_error.connect(self.collection_failed)
         self.collector_worker.start()
+
+    # 切换采集暂停/继续
+    def toggle_collect_pause(self) -> None:
+        if not self.collector_worker or not self.collector_worker.isRunning():
+            return
+        if self._collect_paused:
+            self.collector_worker.resume_collection()
+            self._collect_paused = False
+            self.pause_button.setText("暂停")
+            self.pause_button.setIcon(FIF.PAUSE)
+            self._start_collect_elapsed()
+            if self.collect_status.text() == "已暂停":
+                self.collect_status.setText("采集中")
+            return
+        self.collector_worker.pause_collection()
+        self._collect_paused = True
+        self.pause_button.setText("继续")
+        self.pause_button.setIcon(FIF.PLAY)
+        self._pause_collect_elapsed()
+        self.collect_status.setText("已暂停")
+
+    # 中止当前采集任务
+    def abort_collection(self) -> None:
+        if not self.collector_worker or not self.collector_worker.isRunning():
+            return
+        self.abort_button.setEnabled(False)
+        self.pause_button.setEnabled(False)
+        self.collect_status.setText("正在中止…")
+        if self._collect_paused:
+            self._collect_paused = False
+            self.pause_button.setText("暂停")
+            self.pause_button.setIcon(FIF.PAUSE)
+            self._start_collect_elapsed()
+        self.collector_worker.abort_collection()
+        if self._verification_dialog is not None and self._verification_dialog.isVisible():
+            self._verification_dialog.reject()
+
+    # 将毫秒格式化为 HH:MM:SS
+    def _format_elapsed(self, elapsed_ms: int) -> str:
+        total_seconds = max(0, elapsed_ms) // 1000
+        hours, rem = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(rem, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    # 刷新耗时标签文案
+    def _update_collect_elapsed_label(self) -> None:
+        self.collect_elapsed_label.setText(f"耗时 {self._format_elapsed(self._collect_elapsed_ms)}")
+
+    # 重置采集耗时计数
+    def _reset_collect_elapsed(self) -> None:
+        self._collect_elapsed_timer.stop()
+        self._collect_elapsed_ms = 0
+        self._collect_elapsed_running = False
+        self._collect_elapsed_last_tick = None
+        self._update_collect_elapsed_label()
+
+    # 开始或恢复累计耗时
+    def _start_collect_elapsed(self) -> None:
+        self._collect_elapsed_last_tick = time.monotonic()
+        self._collect_elapsed_running = True
+        if not self._collect_elapsed_timer.isActive():
+            self._collect_elapsed_timer.start()
+        self._update_collect_elapsed_label()
+
+    # 暂停累计耗时（冻结显示）
+    def _pause_collect_elapsed(self) -> None:
+        if self._collect_elapsed_running and self._collect_elapsed_last_tick is not None:
+            self._collect_elapsed_ms += int((time.monotonic() - self._collect_elapsed_last_tick) * 1000)
+        self._collect_elapsed_running = False
+        self._collect_elapsed_last_tick = None
+        self._update_collect_elapsed_label()
+
+    # 停止计时并定格最终耗时
+    def _stop_collect_elapsed(self) -> None:
+        if self._collect_elapsed_running and self._collect_elapsed_last_tick is not None:
+            self._collect_elapsed_ms += int((time.monotonic() - self._collect_elapsed_last_tick) * 1000)
+        self._collect_elapsed_running = False
+        self._collect_elapsed_last_tick = None
+        self._collect_elapsed_timer.stop()
+        self._update_collect_elapsed_label()
+
+    # 定时刷新采集耗时显示
+    def _tick_collect_elapsed(self) -> None:
+        if not self._collect_elapsed_running or self._collect_elapsed_last_tick is None:
+            return
+        now = time.monotonic()
+        self._collect_elapsed_ms += int((now - self._collect_elapsed_last_tick) * 1000)
+        self._collect_elapsed_last_tick = now
+        self._update_collect_elapsed_label()
+
+    # 采集结束时复位控制按钮
+    def _reset_collect_controls(self) -> None:
+        self.start_button.setEnabled(True)
+        self.pause_button.setEnabled(False)
+        self.pause_button.setText("暂停")
+        self.pause_button.setIcon(FIF.PAUSE)
+        self.abort_button.setEnabled(False)
+        self._collect_paused = False
+        self._set_maintenance_enabled(True)
 
     def append_collect_log(self, message: str) -> None:
         self.collect_log.append(message)
@@ -2156,14 +2297,24 @@ class MainWindow(FluentWindow):
                     self._verification_ocr_label.setStyleSheet("font-size: 12px;")
 
     def collection_finished(self, result: dict) -> None:
-        self.start_button.setEnabled(True)
-        self._set_maintenance_enabled(True)
-        self.collect_progress_ring.setValue(100)
-        self.collect_progress_label.setText("100%")
-        self.collect_status.setText("任务完成")
+        self._stop_collect_elapsed()
+        self._reset_collect_controls()
         self.show_result_summary(result)
         self.refresh_history()
         self.refresh_task_center()
+        if result.get("runStatus") == "aborted":
+            self.collect_status.setText("任务已中止")
+            InfoBar.warning(
+                "采集已中止",
+                f"已保留部分结果。输出目录：{result.get('downloadDir', '')}",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+            )
+            return
+        self.collect_progress_ring.setValue(100)
+        self.collect_progress_label.setText("100%")
+        self.collect_status.setText("任务完成")
         InfoBar.success(
             "采集完成",
             f"输出目录：{result.get('downloadDir', '')}",
@@ -2173,8 +2324,8 @@ class MainWindow(FluentWindow):
         )
 
     def collection_failed(self, message: str) -> None:
-        self.start_button.setEnabled(True)
-        self._set_maintenance_enabled(True)
+        self._stop_collect_elapsed()
+        self._reset_collect_controls()
         self.collect_status.setText("任务失败")
         self.collect_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
         self.refresh_history()
