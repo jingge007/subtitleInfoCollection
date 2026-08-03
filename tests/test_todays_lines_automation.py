@@ -173,3 +173,155 @@ async def test_prepare_todays_line_import_payload_transforms_dedupes_and_transla
     assert "subtitlesId" not in payload.records[1]
     assert "subtitlesId" not in payload.records[1]["subtitle"]
     assert payload.records[1]["movieName"] == "Fallback Movie"
+
+
+@pytest.mark.asyncio
+async def test_runner_uses_baidu_translate_when_credentials_configured(tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "BAIDU_TRANSLATE_APP_ID=test-app-id\nBAIDU_TRANSLATE_SECRET=test-secret\n",
+        encoding="utf-8",
+    )
+    baidu_calls: list[str] = []
+    logs: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "fanyi-api.baidu.com" in str(request.url):
+            baidu_calls.append(request.url.params.get("q", ""))
+            assert request.url.params["appid"] == "test-app-id"
+            assert request.url.params["from"] == "zh"
+            assert request.url.params["to"] == "en"
+            assert request.url.params["sign"]
+            return httpx.Response(
+                200,
+                json={"trans_result": [{"src": "你好", "dst": "Hello"}]},
+            )
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"list": [{"id": 1, "description": "你好"}], "total": 1}},
+        )
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    runner = TodaysLinesAutomationRunner(
+        TodaysLinesAutomationOptions(
+            data_dir=tmp_path,
+            env_path=env_path,
+            request_delay_seconds=0,
+            now_provider=lambda: datetime(2026, 5, 5, 8, 9, 10),
+        ),
+        token_provider=lambda: "cached-token",
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+        log=logs.append,
+    )
+
+    result = await runner.run()
+
+    assert baidu_calls == ["你好"]
+    assert result.translation_requested_count == 1
+    assert result.translation_filled_count == 1
+    assert result.translation_failure_count == 0
+    exported = [
+        json.loads(line)
+        for line in result.output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert exported[0]["zhContent"] == "你好"
+    assert exported[0]["enContent"] == "Hello"
+    assert not any("Google" in message for message in logs)
+
+
+@pytest.mark.asyncio
+async def test_runner_records_baidu_error_code_as_translation_failure(tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "BAIDU_TRANSLATE_APP_ID=test-app-id\nBAIDU_TRANSLATE_SECRET=test-secret\n",
+        encoding="utf-8",
+    )
+    logs: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "fanyi-api.baidu.com" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"error_code": "54004", "error_msg": "账户余额不足"},
+            )
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"list": [{"id": 1, "description": "你好"}], "total": 1}},
+        )
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    runner = TodaysLinesAutomationRunner(
+        TodaysLinesAutomationOptions(
+            data_dir=tmp_path,
+            env_path=env_path,
+            request_delay_seconds=0,
+            now_provider=lambda: datetime(2026, 5, 5, 8, 9, 10),
+        ),
+        token_provider=lambda: "cached-token",
+        transport=httpx.MockTransport(handler),
+        sleep=no_sleep,
+        log=logs.append,
+    )
+
+    result = await runner.run()
+
+    assert result.translation_requested_count == 1
+    assert result.translation_filled_count == 0
+    assert result.translation_failure_count == 1
+    assert any("百度翻译失败[54004]" in message for message in logs)
+    exported = [
+        json.loads(line)
+        for line in result.output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert exported[0]["enContent"] == ""
+
+
+@pytest.mark.asyncio
+async def test_runner_skips_translation_when_baidu_credentials_missing(tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("TODAYS_LINES_TOKEN=cached-token\n", encoding="utf-8")
+    baidu_calls = 0
+    logs: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal baidu_calls
+        if "fanyi-api.baidu.com" in str(request.url):
+            baidu_calls += 1
+            return httpx.Response(500, json={"error": "should-not-call"})
+        if "translate.googleapis.com" in str(request.url):
+            return httpx.Response(500, json={"error": "google-should-not-call"})
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"list": [{"id": 1, "description": "你好"}], "total": 1}},
+        )
+
+    runner = TodaysLinesAutomationRunner(
+        TodaysLinesAutomationOptions(
+            data_dir=tmp_path,
+            env_path=env_path,
+            request_delay_seconds=0,
+            now_provider=lambda: datetime(2026, 5, 5, 8, 9, 10),
+        ),
+        token_provider=lambda: "cached-token",
+        transport=httpx.MockTransport(handler),
+        log=logs.append,
+    )
+
+    result = await runner.run()
+
+    assert baidu_calls == 0
+    assert result.translation_requested_count == 0
+    assert result.translation_filled_count == 0
+    assert result.translation_failure_count == 0
+    assert any("未配置百度翻译，跳过英文补全" in message for message in logs)
+    exported = [
+        json.loads(line)
+        for line in result.output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert exported[0]["zhContent"] == "你好"
+    assert exported[0]["enContent"] == ""

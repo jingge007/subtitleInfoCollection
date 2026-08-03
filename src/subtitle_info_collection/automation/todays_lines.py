@@ -15,10 +15,11 @@ from typing import Any
 
 import httpx
 
+from ..config import read_env_values, upsert_env_values
+
 
 DEFAULT_LOGIN_URL = "https://33tc.net"
 DEFAULT_API_URL = "https://ssv-api.agilestudio.cn/api/recommend/subtitle-list"
-DEFAULT_GOOGLE_TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
 DEFAULT_BAIDU_TRANSLATE_URL = "https://fanyi-api.baidu.com/api/trans/vip/translate"
 TOKEN_CACHE_FILE = "todays-lines-token-cache.json"
 UNICLOUD_IMPORT_SPLIT_BYTES = 45 * 1024 * 1024
@@ -71,7 +72,6 @@ class TodaysLinesAutomationOptions:
     login_timeout_seconds: int = 60
     login_url: str = DEFAULT_LOGIN_URL
     api_url: str = DEFAULT_API_URL
-    google_translate_url: str = DEFAULT_GOOGLE_TRANSLATE_URL
     baidu_translate_url: str = DEFAULT_BAIDU_TRANSLATE_URL
     env_path: Path | None = None
     unicloud_import_format: bool = True
@@ -404,11 +404,10 @@ class TodaysLinesAutomationRunner:
             export_items = items
             if self.options.unicloud_import_format:
                 self.log("按 todays-line / uniCloud 控制台导入格式处理数据")
+                translate_text = self._resolve_translate_provider(client)
                 payload = await prepare_todays_line_import_payload(
                     items,
-                    translate_text=self.translate_provider or (
-                        lambda text: self._translate_chinese_to_english(client, text)
-                    ),
+                    translate_text=translate_text,
                     log=self.log,
                 )
                 export_items = payload.records
@@ -476,7 +475,7 @@ class TodaysLinesAutomationRunner:
             TODAYS_LINES_TOKEN_ENV: token,
             TODAYS_LINES_TOKEN_TIME_ENV: timestamp,
         }
-        _upsert_env_values(self.options.env_path, values)
+        upsert_env_values(self.options.env_path, values)
         os.environ.update(values)
 
     async def _request_new_token(self) -> str:
@@ -641,42 +640,40 @@ class TodaysLinesAutomationRunner:
         response.raise_for_status()
         return dict(response.json())
 
+    # 有外部注入或百度凭据时启用英译；未配置则跳过
+    def _resolve_translate_provider(
+        self,
+        client: httpx.AsyncClient,
+    ) -> TranslateProvider | None:
+        if self.translate_provider is not None:
+            return self.translate_provider
+        env_values = self._read_env_values()
+        if not self._has_baidu_translate_credentials(env_values):
+            self.log("未配置百度翻译，跳过英文补全")
+            return None
+        return lambda text: self._translate_chinese_to_english(client, text, env_values)
+
+    # 判断百度翻译 App ID 与 Secret 是否均已配置
+    @staticmethod
+    def _has_baidu_translate_credentials(env_values: dict[str, str]) -> bool:
+        return bool(
+            str(env_values.get(BAIDU_TRANSLATE_APP_ID_ENV) or "").strip()
+            and str(env_values.get(BAIDU_TRANSLATE_SECRET_ENV) or "").strip()
+        )
+
+    # 仅通过百度翻译将中文台词补全为英文
     async def _translate_chinese_to_english(
         self,
         client: httpx.AsyncClient,
         text: str,
+        env_values: dict[str, str] | None = None,
     ) -> str:
-        try:
-            google_result = await self._translate_by_google(client, text)
-            if normalize_todays_line_text(google_result):
-                return google_result
-        except Exception as google_error:  # noqa: BLE001
-            self.log(f"Google 翻译失败，尝试百度兜底：{google_error}")
+        values = env_values if env_values is not None else self._read_env_values()
+        if not self._has_baidu_translate_credentials(values):
+            raise TodaysLinesAutomationError("未配置百度翻译凭据")
+        return await self._translate_by_baidu(client, text, values)
 
-        env_values = self._read_env_values()
-        if not env_values.get(BAIDU_TRANSLATE_APP_ID_ENV) or not env_values.get(
-            BAIDU_TRANSLATE_SECRET_ENV
-        ):
-            raise TodaysLinesAutomationError("Google 翻译失败，且未配置百度翻译凭据")
-        return await self._translate_by_baidu(client, text, env_values)
-
-    async def _translate_by_google(self, client: httpx.AsyncClient, text: str) -> str:
-        response = await client.get(
-            self.options.google_translate_url,
-            params={
-                "client": "gtx",
-                "sl": "zh-CN",
-                "tl": "en",
-                "dt": "t",
-                "q": text,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, list) or not data or not isinstance(data[0], list):
-            return ""
-        return "".join(str(item[0] or "") for item in data[0] if item).strip()
-
+    # 调用百度通用翻译 API（含 QPS 间隔与错误码透出）
     async def _translate_by_baidu(
         self,
         client: httpx.AsyncClient,
@@ -692,7 +689,7 @@ class TodaysLinesAutomationRunner:
         app_id = str(env_values.get(BAIDU_TRANSLATE_APP_ID_ENV) or "")
         secret = str(env_values.get(BAIDU_TRANSLATE_SECRET_ENV) or "")
         salt = f"{int(time.time() * 1000)}"
-        sign = hashlib.md5(f"{app_id}{text}{salt}{secret}".encode()).hexdigest()
+        sign = hashlib.md5(f"{app_id}{text}{salt}{secret}".encode("utf-8")).hexdigest()
         response = await client.get(
             self.options.baidu_translate_url,
             params={
@@ -706,13 +703,18 @@ class TodaysLinesAutomationRunner:
         )
         response.raise_for_status()
         data = response.json()
-        if data.get("error_code"):
-            raise TodaysLinesAutomationError(data.get("error_msg") or "百度翻译接口返回错误")
+        error_code = data.get("error_code")
+        if error_code:
+            error_msg = data.get("error_msg") or "百度翻译接口返回错误"
+            raise TodaysLinesAutomationError(f"百度翻译失败[{error_code}]：{error_msg}")
         results = data.get("trans_result") or []
         return "".join(str(item.get("dst") or "") for item in results).strip()
 
     def _read_env_values(self) -> dict[str, str]:
-        values = _read_env_values(self.options.env_path)
+        # 已指定 env_path 时以文件为准，避免进程内其它测试/加载污染 os.environ
+        if self.options.env_path is not None:
+            return read_env_values(self.options.env_path)
+        values: dict[str, str] = {}
         for key in [
             TODAYS_LINES_USERNAME_ENV,
             TODAYS_LINES_PASSWORD_ENV,
@@ -721,7 +723,7 @@ class TodaysLinesAutomationRunner:
             BAIDU_TRANSLATE_APP_ID_ENV,
             BAIDU_TRANSLATE_SECRET_ENV,
         ]:
-            if key not in values and key in os.environ:
+            if key in os.environ:
                 values[key] = os.environ[key]
         return values
 
@@ -815,54 +817,3 @@ def _normalize_record_id(value: Any, fallback: int) -> int | float | str:
     text = str(value).strip() if value is not None else ""
     return text or fallback
 
-
-def _read_env_values(env_path: Path | None) -> dict[str, str]:
-    if not env_path or not env_path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        key = key.strip()
-        if key.startswith("export "):
-            key = key[7:].strip()
-        values[key] = _clean_env_value(value)
-    return values
-
-
-def _clean_env_value(value: str) -> str:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-        return value[1:-1]
-    return value
-
-
-def _upsert_env_values(env_path: Path | None, values: dict[str, str]) -> None:
-    if not env_path:
-        return
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    remaining = dict(values)
-    updated_lines: list[str] = []
-
-    for line in lines:
-        stripped = line.strip()
-        key = ""
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key.startswith("export "):
-                key = key[7:].strip()
-        if key in remaining:
-            updated_lines.append(f"{key}={remaining.pop(key)}")
-        else:
-            updated_lines.append(line)
-
-    if remaining:
-        if updated_lines and updated_lines[-1].strip():
-            updated_lines.append("")
-        for key, value in remaining.items():
-            updated_lines.append(f"{key}={value}")
-
-    env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")

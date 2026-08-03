@@ -115,7 +115,6 @@ async def test_download_rate_limit_applies_to_api_providers_including_retries(
     orch = SubtitleCollectionOrchestrator()
     config = TaskConfig(
         request_interval_ms=150,
-        download_enabled=True,
         subtitle_min_bilingual_ratio=0.0,
         output_root=tmp_path,
     )
@@ -168,7 +167,6 @@ async def test_subhd_download_skips_bucket_rate_limit(tmp_path: Path):
     await orch._respect_rate_limit("subhd", 5_000)
     config = TaskConfig(
         request_interval_ms=5_000,
-        download_enabled=True,
         subtitle_min_bilingual_ratio=0.0,
         output_root=tmp_path,
     )
@@ -240,7 +238,6 @@ async def test_movie_concurrency_keeps_same_provider_exclusive(
         limit=4,
         request_interval_ms=50,
         movie_concurrency=2,
-        download_enabled=True,
         subtitle_providers=["assrt"],
         provider_priority=["assrt"],
         subtitle_min_bilingual_ratio=0.0,

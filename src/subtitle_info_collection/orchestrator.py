@@ -241,6 +241,28 @@ class SubtitleCollectionOrchestrator:
         # 按字幕源分桶的上次请求时间（search / API download 共用）
         self._last_provider_request_at: dict[str, float] = {}
 
+    # 向 GUI 推送电影/失败/下载实时计数（可附带进度环字段）
+    def _emit_live_stats(
+        self,
+        *,
+        movie_count: int,
+        failed_count: int,
+        download_count: int,
+        current: int | None = None,
+        total: int | None = None,
+        current_movie: str = "",
+    ) -> None:
+        payload: dict[str, object] = {
+            "movieCount": movie_count,
+            "failedCount": failed_count,
+            "downloadCount": download_count,
+        }
+        if current is not None:
+            payload["current"] = current
+            payload["total"] = total if total is not None else 0
+            payload["currentMovie"] = current_movie
+        self.progress(payload)
+
     async def run(self, config: TaskConfig) -> dict[str, object]:
         started_at = datetime.now()
         self.control.bind_loop(asyncio.get_running_loop())
@@ -270,6 +292,22 @@ class SubtitleCollectionOrchestrator:
         movie_sem = asyncio.Semaphore(movie_concurrency)
         provider_sems = {provider.id: asyncio.Semaphore(1) for provider in active_providers}
         completed_count = 0
+        started_movie_count = 0
+
+        # 在持有 state_lock 时调用，推送当前实时计数快照
+        def emit_stats_locked(
+            *,
+            current: int | None = None,
+            current_movie: str = "",
+        ) -> None:
+            self._emit_live_stats(
+                movie_count=started_movie_count,
+                failed_count=len(failed_records),
+                download_count=len(download_results),
+                current=current,
+                total=len(movies) if current is not None else None,
+                current_movie=current_movie,
+            )
 
         try:
             self.log(
@@ -292,10 +330,15 @@ class SubtitleCollectionOrchestrator:
                         error="没有启用的字幕源",
                     )
                 )
+                self._emit_live_stats(
+                    movie_count=started_movie_count,
+                    failed_count=len(failed_records),
+                    download_count=len(download_results),
+                )
 
             # 处理单部电影（受电影并发与每源互斥约束）
             async def process_movie(movie: MovieInfo) -> None:
-                nonlocal completed_count
+                nonlocal completed_count, started_movie_count
                 # 拿并发名额前检查暂停/中止，避免暂停时占满 semaphore
                 if await self.control.wait_if_paused_or_aborted():
                     return
@@ -306,6 +349,9 @@ class SubtitleCollectionOrchestrator:
                     self.log(
                         f"[{datetime.now().strftime('%H:%M:%S')}] 采集：{movie_name}"
                     )
+                    async with state_lock:
+                        started_movie_count += 1
+                        emit_stats_locked()
                     movie_download_ok = False
                     any_candidate_found = False
 
@@ -327,6 +373,7 @@ class SubtitleCollectionOrchestrator:
                                 stats=provider_stats,
                                 failed_records=failed_records,
                                 state_lock=state_lock,
+                                on_stats=emit_stats_locked,
                             )
                             if not candidates:
                                 continue
@@ -344,10 +391,6 @@ class SubtitleCollectionOrchestrator:
                                 f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 命中 "
                                 f"{len(sorted_candidates)} 条，推荐：{best.provider}/{best.subtitle_title}"
                             )
-
-                            if not config.download_enabled:
-                                movie_download_ok = True
-                                break
 
                             max_download_attempts = 3
                             attempted_downloads = 0
@@ -371,6 +414,7 @@ class SubtitleCollectionOrchestrator:
                                     failed_records=failed_records,
                                     download_results=download_results,
                                     state_lock=state_lock,
+                                    on_stats=emit_stats_locked,
                                 )
                                 if error_type == ErrorType.DOWNLOAD_QUOTA_EXCEEDED:
                                     async with state_lock:
@@ -413,7 +457,8 @@ class SubtitleCollectionOrchestrator:
                                     error="没有找到符合要求的双语 ass/srt 字幕候选",
                                 )
                             )
-                    elif not movie_download_ok and config.download_enabled:
+                            emit_stats_locked()
+                    elif not movie_download_ok:
                         self.log(
                             f"[{datetime.now().strftime('%H:%M:%S')}] 所有字幕源下载失败：{movie_name}"
                         )
@@ -421,13 +466,7 @@ class SubtitleCollectionOrchestrator:
                     async with state_lock:
                         completed_count += 1
                         current = completed_count
-                    self.progress(
-                        {
-                            "current": current,
-                            "total": len(movies),
-                            "currentMovie": movie_name,
-                        }
-                    )
+                        emit_stats_locked(current=current, current_movie=movie_name)
 
             if movies and active_providers:
                 await asyncio.gather(*(process_movie(movie) for movie in movies))
@@ -513,6 +552,7 @@ class SubtitleCollectionOrchestrator:
         stats: dict[str, dict[str, object]],
         failed_records: list[FailedRecord],
         state_lock: asyncio.Lock | None = None,
+        on_stats: Callable[[], None] | None = None,
     ) -> list[SubtitleCandidate]:
         lock = state_lock or asyncio.Lock()
         valid_candidates: list[SubtitleCandidate] = []
@@ -601,13 +641,14 @@ class SubtitleCollectionOrchestrator:
                         int(provider_stats["filteredCount"]) + filtered_delta
                     )
                     failed_records.extend(local_failed)
+                    if local_failed and on_stats is not None:
+                        on_stats()
                     if provider_valid:
                         provider_stats["hitCount"] = (
                             int(provider_stats["hitCount"]) + len(provider_valid)
                         )
                         valid_candidates.extend(provider_valid)
-                        if not config.fallback_enabled:
-                            break
+                        break
                     elif provider_lenient:
                         self.log(
                             f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 严格校验无命中，"
@@ -617,8 +658,7 @@ class SubtitleCollectionOrchestrator:
                             int(provider_stats["hitCount"]) + len(provider_lenient)
                         )
                         valid_candidates.extend(provider_lenient)
-                        if not config.fallback_enabled:
-                            break
+                        break
                     else:
                         provider_stats["noMatchCount"] = int(provider_stats["noMatchCount"]) + 1
                         self.log(
@@ -639,6 +679,8 @@ class SubtitleCollectionOrchestrator:
                             error=f"搜索超时（{timeout}秒）",
                         )
                     )
+                    if on_stats is not None:
+                        on_stats()
                 self.log(
                     f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 搜索超时（{timeout}秒），"
                     f"尝试下一个字幕源"
@@ -660,6 +702,8 @@ class SubtitleCollectionOrchestrator:
                             error=str(exc),
                         )
                     )
+                    if on_stats is not None:
+                        on_stats()
                 self.log(
                     f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id}.search.fail "
                     f"搜索异常 provider={provider.id} movie={movie.display_title} "
@@ -677,6 +721,7 @@ class SubtitleCollectionOrchestrator:
         failed_records: list[FailedRecord],
         download_results: list[DownloadResult],
         state_lock: asyncio.Lock | None = None,
+        on_stats: Callable[[], None] | None = None,
     ) -> str:
         lock = state_lock or asyncio.Lock()
         provider = next((item for item in providers if item.id == best.provider), None)
@@ -693,6 +738,8 @@ class SubtitleCollectionOrchestrator:
                         provider_subtitle_id=best.provider_subtitle_id,
                     )
                 )
+                if on_stats is not None:
+                    on_stats()
             return ErrorType.PROVIDER_DISABLED
 
         max_retries = 2
@@ -734,6 +781,8 @@ class SubtitleCollectionOrchestrator:
                             saved_paths=saved_paths,
                         )
                     )
+                    if on_stats is not None:
+                        on_stats()
                 self.log(
                     f"[{datetime.now().strftime('%H:%M:%S')}] 下载成功："
                     f"{best.provider}/{best.subtitle_title} "
@@ -765,6 +814,8 @@ class SubtitleCollectionOrchestrator:
                             provider_subtitle_id=best.provider_subtitle_id,
                         )
                     )
+                    if on_stats is not None:
+                        on_stats()
                 self.log(
                     f"[{datetime.now().strftime('%H:%M:%S')}] 下载失败："
                     f"{best.provider}/{best.subtitle_title} - {exc}"
@@ -796,6 +847,8 @@ class SubtitleCollectionOrchestrator:
                             provider_subtitle_id=best.provider_subtitle_id,
                         )
                     )
+                    if on_stats is not None:
+                        on_stats()
                 self.log(
                     f"[{datetime.now().strftime('%H:%M:%S')}] 下载异常："
                     f"{best.provider}/{best.subtitle_title} - {exc}"
@@ -841,8 +894,6 @@ class SubtitleCollectionOrchestrator:
             "providers": config.subtitle_providers,
             "requestIntervalMs": config.request_interval_ms,
             "movieConcurrency": config.movie_concurrency,
-            "fallbackEnabled": config.fallback_enabled,
-            "downloadEnabled": config.download_enabled,
             "startedAt": started_at.replace(microsecond=0).isoformat(),
             "finishedAt": now_iso(),
             "runStatus": run_status,

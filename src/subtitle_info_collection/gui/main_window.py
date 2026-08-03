@@ -60,10 +60,11 @@ from qfluentwidgets import (
     Theme,
 )
 
-from ..config import AppSettings, bootstrap_env_file, evaluate_config
+from ..config import AppSettings, bootstrap_env_file, evaluate_config, upsert_env_values
 from ..engines.subtitle_engine import MIN_VALID_SUBTITLE_BYTES
 from ..models import TaskConfig
 from ..storage import AppStorage
+from .config_editor import ConfigEditorWidget
 from .styles import (
     GLOBAL_QSS,
     LOG_STYLE,
@@ -217,6 +218,8 @@ class MainWindow(FluentWindow):
 
         self.setStyleSheet(GLOBAL_QSS)
         self.navigationInterface.setExpandWidth(200)
+        # 启动时默认展开侧边栏（否则宽窗口下仍保持收起态）
+        self.navigationInterface.expand(useAni=False)
         self.refresh_history()
         self.refresh_task_center()
 
@@ -512,55 +515,6 @@ class MainWindow(FluentWindow):
             )
         return label
 
-    def _refresh_config_cards(self) -> None:
-        self._clear_layout(self.config_cards_layout)
-        cards = [
-            self._status_card(
-                ".env",
-                "已创建" if self.config_check.env_exists else "未找到",
-                str(self.config_check.env_path),
-                self.config_check.env_exists,
-            ),
-            self._status_card(
-                "TMDb",
-                "已配置" if self.config_check.tmdb_configured else "缺少 Token",
-                "电影榜单与本地字幕匹配",
-                self.config_check.tmdb_configured,
-            ),
-            self._status_card(
-                "数据目录",
-                "可用" if self.config_check.data_dir_exists else "待创建",
-                str(self.config_check.data_dir),
-                self.config_check.data_dir_exists,
-            ),
-            self._status_card(
-                "字幕源",
-                f"{self.config_check.configured_provider_count}/{self.config_check.enabled_provider_count} 可用",
-                "SubHD 无需 Token，ASSRT/OpenSubtitles 需要密钥",
-                self.config_check.configured_provider_count > 0,
-            ),
-            self._status_card(
-                "请求间隔",
-                f"{self.config_check.request_interval_ms} ms",
-                "已自动限制到安全下限",
-                None,
-            ),
-            self._status_card(
-                "电影并发",
-                f"{self.config_check.movie_concurrency}",
-                "SUBTITLE_MOVIE_CONCURRENCY（1～4）",
-                None,
-            ),
-            self._status_card(
-                "代理",
-                "已启用" if self.config_check.proxies_configured else "未启用",
-                "HTTP_PROXY / HTTPS_PROXY",
-                None,
-            ),
-        ]
-        for index, card in enumerate(cards):
-            self.config_cards_layout.addWidget(card, index // 3, index % 3)
-
     def _refresh_latest_records(self) -> None:
         if not hasattr(self, "latest_records_layout"):
             return
@@ -632,98 +586,85 @@ class MainWindow(FluentWindow):
 
     def _build_config_page(self) -> QWidget:
         page, _content, layout = self._scroll_page("configPage")
-
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        title_col = QVBoxLayout()
-        title_col.setSpacing(2)
-        title = SubtitleLabel("配置项")
-        title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT};")
-        subtitle = BodyLabel("管理应用配置、环境变量和配置提示")
-        subtitle.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
-        title_col.addWidget(title)
-        title_col.addWidget(subtitle)
-        header.addLayout(title_col, 1)
-        layout.addLayout(header)
-
-        config_card = self._card("配置预检")
-        self.config_cards_layout = QGridLayout()
-        self.config_cards_layout.setSpacing(PAGE_SPACING)
-        config_card.viewLayout.addLayout(self.config_cards_layout)
-
-        env_overview_card = self._card("环境概览")
-        self.env_items_layout = QVBoxLayout()
-        self.env_items_layout.setSpacing(6)
-        env_overview_card.viewLayout.addLayout(self.env_items_layout)
-
-        tips_card = self._card("配置提示")
-        tips_inner = QVBoxLayout()
-        tips_inner.setSpacing(6)
-        tips_items = [
-            (".env 密钥", "TMDB_TOKEN、ASSRT_TOKEN、OpenSubtitles 账号均不在界面编辑，请直接修改 .env 文件。"),
-            ("代理与间隔", "HTTP_PROXY、HTTPS_PROXY、SUBTITLE_REQUEST_INTERVAL_MS 从 .env 读取。"),
-            ("源优先级", "SUBTITLE_PROVIDER_PRIORITY / SUBTITLE_PROVIDER_DISABLED 从 .env 读取。"),
-        ]
-        for tip_title, tip_detail in tips_items:
-            tip_row = QHBoxLayout()
-            tip_row.setSpacing(10)
-            tip_h = StrongBodyLabel(tip_title)
-            tip_h.setFixedWidth(80)
-            tip_d = CaptionLabel(tip_detail)
-            tip_d.setWordWrap(True)
-            tip_d.setMinimumWidth(0)
-            tip_d.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            tip_row.addWidget(tip_h)
-            tip_row.addWidget(tip_d, 1)
-            tips_inner.addLayout(tip_row)
-        tips_card.viewLayout.addLayout(tips_inner)
-
-        overview_row = QHBoxLayout()
-        overview_row.setSpacing(PAGE_SPACING)
-        overview_row.addWidget(env_overview_card, 3)
-        overview_row.addWidget(tips_card, 2)
-
-        layout.addWidget(config_card)
-        layout.addLayout(overview_row, 1)
+        self.config_editor = ConfigEditorWidget(self)
+        self.config_editor.save_clicked.connect(self.save_all_config_to_env)
+        self.config_editor.reload_clicked.connect(self.reload_config_from_env)
+        self.config_editor.open_env_clicked.connect(
+            lambda: self.open_path(self.env_bootstrap.env_path.parent)
+        )
+        layout.addWidget(self.config_editor)
+        self.config_editor.load_from_settings(self.settings)
+        self.config_editor.refresh_overview(self.config_check)
         return page
 
+    # 刷新配置预检概览（不覆盖表单中未保存的编辑）
     def refresh_config_page(self) -> None:
-        if not hasattr(self, "config_cards_layout"):
+        if not hasattr(self, "config_editor"):
             return
         self.settings = AppSettings.from_env(self.env_bootstrap.env_path)
         self.config_check = evaluate_config(self.settings, self.env_bootstrap.env_path)
-        self._refresh_config_cards()
-        self._refresh_env_table()
+        self.config_editor.refresh_overview(self.config_check)
 
-    def _refresh_env_table(self) -> None:
-        self._clear_layout(self.env_items_layout)
-        env_items = [
-            ("TMDB_TOKEN", self.config_check.tmdb_configured, "电影榜单与本地字幕匹配"),
-            ("ASSRT_TOKEN", bool(os.environ.get("ASSRT_TOKEN", "").strip()), "ASSRT 字幕源密钥"),
-            ("OpenSubtitles", bool(os.environ.get("OPENSUBTITLES_API_KEY", "").strip()), "OpenSubtitles API 密钥"),
-            ("HTTP_PROXY", bool(os.environ.get("HTTP_PROXY", "").strip() or os.environ.get("HTTPS_PROXY", "").strip()), "HTTP/HTTPS 代理"),
-            ("请求间隔", True, f"{self.config_check.request_interval_ms} ms"),
-            ("电影并发", True, f"{self.config_check.movie_concurrency}"),
-        ]
-        for name, configured, desc in env_items:
-            row_widget = CardWidget(self)
-            row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            row_widget.setFixedHeight(38)
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(12, 6, 12, 6)
-            row_layout.setSpacing(10)
-            name_label = StrongBodyLabel(name)
-            name_label.setFixedWidth(120)
-            name_label.setStyleSheet(f"font-size: 13px; color: {TEXT};")
-            badge = self._status_badge("已配置" if configured else "未配置", configured)
-            desc_label = CaptionLabel(desc)
-            desc_label.setStyleSheet(f"color: {TEXT_SOFT};")
-            desc_label.setWordWrap(True)
-            desc_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            row_layout.addWidget(name_label)
-            row_layout.addWidget(badge)
-            row_layout.addWidget(desc_label, 1)
-            self.env_items_layout.addWidget(row_widget)
+    # 丢弃未保存编辑，按当前 .env 重新对齐表单
+    def reload_config_from_env(self) -> None:
+        self.settings = AppSettings.from_env(self.env_bootstrap.env_path)
+        self.config_check = evaluate_config(self.settings, self.env_bootstrap.env_path)
+        self.config_editor.load_from_settings(self.settings)
+        self.config_editor.refresh_overview(self.config_check)
+        InfoBar.success(
+            "已重新加载",
+            "表单已与当前 .env 对齐。",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=2500,
+        )
+
+    # 将配置项表单写回 .env 并刷新运行时设置
+    def save_all_config_to_env(self) -> None:
+        if not hasattr(self, "config_editor"):
+            return
+        try:
+            values = self.config_editor.collect_env_values()
+        except ValueError as exc:
+            InfoBar.warning(
+                "配置无效",
+                str(exc),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+            )
+            return
+
+        env_path = self.env_bootstrap.env_path
+        try:
+            upsert_env_values(env_path, values)
+        except OSError as exc:
+            InfoBar.error(
+                "保存失败",
+                f"无法写入 .env：{exc}",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=4000,
+            )
+            return
+
+        for key, value in values.items():
+            os.environ[key] = value
+        self.settings = AppSettings.from_env(env_path)
+        self.settings.data_dir.mkdir(parents=True, exist_ok=True)
+        self.config_check = evaluate_config(self.settings, env_path)
+        self.storage = AppStorage(self.settings.database_path)
+        self.config_editor.load_from_settings(self.settings)
+        self.config_editor.refresh_overview(self.config_check)
+        self.refresh_history()
+        self.refresh_task_center()
+        InfoBar.success(
+            "已保存",
+            f"配置已同步到 {env_path}",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
 
     # ── Path Helpers ──────────────────────────────────────────────────
 
@@ -763,7 +704,7 @@ class MainWindow(FluentWindow):
         title_col.setSpacing(2)
         title = SubtitleLabel("采集任务")
         title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT};")
-        subtitle = BodyLabel("选择年份、Top 数量、字幕源和下载策略，运行采集工作流")
+        subtitle = BodyLabel("选择年份、Top 数量和字幕源，运行采集工作流")
         subtitle.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
@@ -811,15 +752,6 @@ class MainWindow(FluentWindow):
 
         row2 = QHBoxLayout()
         row2.setSpacing(12)
-        strategy_label = StrongBodyLabel("策略")
-        self.fallback_check = CheckBox("源兜底", self)
-        self.fallback_check.setChecked(False)
-        self.download_check = CheckBox("下载字幕", self)
-        self.download_check.setChecked(True)
-        row2.addWidget(strategy_label)
-        row2.addWidget(self.fallback_check)
-        row2.addWidget(self.download_check)
-        row2.addSpacing(24)
         source_label = StrongBodyLabel("字幕源")
         disabled_providers = set(self.settings.provider_disabled)
         self.subhd_check = CheckBox("SubHD", self)
@@ -893,8 +825,6 @@ class MainWindow(FluentWindow):
         self.collect_stat_labels: dict[str, QLabel] = {}
         stat_items = [
             ("movies", "电影", PRIMARY, PRIMARY_SOFT),
-            ("hits", "命中", GREEN, GREEN_SOFT),
-            ("filtered", "过滤", ORANGE, ORANGE_SOFT),
             ("failed", "失败", RED, RED_SOFT),
             ("downloaded", "下载", GREEN, GREEN_SOFT),
         ]
@@ -1624,68 +1554,19 @@ class MainWindow(FluentWindow):
         title_col.setSpacing(2)
         title = SubtitleLabel("设置与维护")
         title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT};")
-        subtitle = BodyLabel("管理数据目录与本地维护操作")
+        subtitle = BodyLabel("本地数据维护；密钥与运行配置请在「配置项」中管理")
         subtitle.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         header.addLayout(title_col, 1)
         layout.addLayout(header)
 
-        config_card = self._card("本机配置")
-        config_inner = QVBoxLayout()
-        config_inner.setSpacing(6)
-        cfg_row = QHBoxLayout()
-        cfg_row.setSpacing(10)
-        cfg_label = StrongBodyLabel("数据目录")
-        cfg_label.setFixedWidth(70)
-        self.data_dir_input = LineEdit(self)
-        self.data_dir_input.setText(str(self.settings.data_dir))
-        browse_button = PushButton("选择", self)
-        browse_button.setIcon(FIF.FOLDER)
-        browse_button.clicked.connect(self.browse_data_dir)
-        save_button = PrimaryPushButton("保存", self)
-        save_button.setIcon(FIF.SAVE)
-        save_button.clicked.connect(self.save_data_dir_to_env)
-        cfg_row.addWidget(cfg_label)
-        cfg_row.addWidget(self.data_dir_input, 1)
-        cfg_row.addWidget(browse_button)
-        cfg_row.addWidget(save_button)
-
-        env_row = QHBoxLayout()
-        env_row.setSpacing(10)
-        env_label = StrongBodyLabel(".env 路径")
-        env_label.setFixedWidth(70)
-        env_path_text = LineEdit(self)
-        env_path_text.setText(str(self.env_bootstrap.env_path))
-        env_path_text.setReadOnly(True)
-        open_env_button = PushButton("打开", self)
-        open_env_button.setIcon(FIF.FOLDER)
-        open_env_button.clicked.connect(lambda: self.open_path(self.env_bootstrap.env_path.parent))
-        env_row.addWidget(env_label)
-        env_row.addWidget(env_path_text, 1)
-        env_row.addWidget(open_env_button)
-
-        config_inner.addLayout(cfg_row)
-        config_inner.addLayout(env_row)
-
-        # 验证码提示音开关
-        sound_row = QHBoxLayout()
-        sound_row.setSpacing(10)
-        sound_label = StrongBodyLabel("验证码提示音")
-        sound_label.setFixedWidth(70)
-        self.captcha_sound_switch = SwitchButton(self)
-        self.captcha_sound_switch.setChecked(self.settings.captcha_sound_enabled)
-        self.captcha_sound_switch.setOnText("开")
-        self.captcha_sound_switch.setOffText("关")
-        sound_desc = CaptionLabel("验证码弹出时播放系统提示音（最小化时仍会闪烁任务栏和显示托盘通知）")
-        sound_desc.setStyleSheet(f"color: {TEXT_SOFT};")
-        sound_desc.setWordWrap(True)
-        sound_row.addWidget(sound_label)
-        sound_row.addWidget(self.captcha_sound_switch)
-        sound_row.addWidget(sound_desc, 1)
-        self.captcha_sound_switch.checkedChanged.connect(self._save_captcha_sound_to_env)
-        config_inner.addLayout(sound_row)
-        config_card.viewLayout.addLayout(config_inner)
+        tip = CaptionLabel(
+            f"当前数据目录：{self.settings.data_dir}；.env：{self.env_bootstrap.env_path}"
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet(f"color: {TEXT_SOFT};")
+        layout.addWidget(tip)
 
         maintenance_card = self._card("数据维护")
         maintenance_layout = QHBoxLayout()
@@ -1754,17 +1635,13 @@ class MainWindow(FluentWindow):
         maintenance_layout.addWidget(delete_card)
         maintenance_card.viewLayout.addLayout(maintenance_layout)
 
-        layout.addWidget(config_card)
         layout.addWidget(maintenance_card, 1)
         return page
 
     # ── Data Dir Helpers ──────────────────────────────────────────────
 
     def _current_data_dir(self) -> Path:
-        text = self.data_dir_input.text().strip()
-        if not text:
-            raise ValueError("请先设置数据目录。")
-        return Path(text).expanduser().resolve()
+        return self.settings.data_dir.expanduser().resolve()
 
     def _ensure_storage_for_current_data_dir(self) -> Path:
         data_dir = self._current_data_dir()
@@ -1818,8 +1695,6 @@ class MainWindow(FluentWindow):
             year=self.year_spin.value(),
             limit=self.limit_spin.value(),
             subtitle_providers=providers,
-            fallback_enabled=self.fallback_check.isChecked(),
-            download_enabled=self.download_check.isChecked(),
             subtitle_min_bilingual_ratio=env_settings.subtitle_min_bilingual_ratio,
             request_interval_ms=env_settings.request_interval_ms,
             movie_concurrency=env_settings.movie_concurrency,
@@ -1849,6 +1724,9 @@ class MainWindow(FluentWindow):
         self.collect_progress_ring.setValue(0)
         self.collect_progress_label.setText("0%")
         self.collect_status.setText("任务启动中")
+        for key in ("movies", "failed", "downloaded"):
+            if key in self.collect_stat_labels:
+                self.collect_stat_labels[key].setText("0")
         self.start_button.setEnabled(False)
         self.pause_button.setEnabled(True)
         self.pause_button.setText("暂停")
@@ -1861,6 +1739,7 @@ class MainWindow(FluentWindow):
         self.collector_worker = CollectorWorker(config, self.storage.database_path)
         self.collector_worker.log_message.connect(self.append_collect_log)
         self.collector_worker.progress_changed.connect(self.update_collect_progress)
+        self.collector_worker.stats_changed.connect(self.update_collect_stats)
         self.collector_worker.verification_requested.connect(self.handle_verification_request)
         self.collector_worker.finished_success.connect(self.collection_finished)
         self.collector_worker.finished_error.connect(self.collection_failed)
@@ -1981,6 +1860,17 @@ class MainWindow(FluentWindow):
         self.collect_progress_ring.setValue(percent)
         self.collect_progress_label.setText(f"{percent}%")
         self.collect_status.setText(f"{current}/{total} {movie}")
+
+    # 实时刷新电影/失败/下载计数卡片
+    def update_collect_stats(self, stats: dict) -> None:
+        mapping = {
+            "movies": stats.get("movieCount", 0),
+            "failed": stats.get("failedCount", 0),
+            "downloaded": stats.get("downloadCount", 0),
+        }
+        for key, value in mapping.items():
+            if key in self.collect_stat_labels:
+                self.collect_stat_labels[key].setText(str(value))
 
     def _pixmap_from_data_uri(self, data_uri: str) -> QPixmap:
         if not data_uri.startswith("data:image/") or "," not in data_uri:
@@ -2333,10 +2223,8 @@ class MainWindow(FluentWindow):
         InfoBar.error("采集失败", message, parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     def show_result_summary(self, result: dict) -> None:
+        # 电影卡保持过程中「已开始数」，结束时仅校准失败/下载
         stat_map = {
-            "movies": result.get("movieCount", 0),
-            "hits": result.get("bestCount", 0),
-            "filtered": result.get("subtitleCount", 0) - result.get("bestCount", 0),
             "failed": result.get("failedCount", 0),
             "downloaded": result.get("downloadCount", 0),
         }
@@ -2825,63 +2713,6 @@ class MainWindow(FluentWindow):
         self._filter_history_table()
 
     # ── Settings Actions ──────────────────────────────────────────────
-
-    def browse_data_dir(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "选择数据目录", self.data_dir_input.text())
-        if directory:
-            self.data_dir_input.setText(directory)
-
-    def _save_captcha_sound_to_env(self, checked: bool) -> None:
-        """保存验证码提示音开关到 .env 文件"""
-        env_path = self.env_bootstrap.env_path
-        key = "CAPTCHA_SOUND_ENABLED"
-        value = "true" if checked else "false"
-        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-        updated = False
-        for index, line in enumerate(lines):
-            if line.strip().startswith(f"{key}="):
-                lines[index] = f"{key}={value}"
-                updated = True
-                break
-        if not updated:
-            if lines and lines[-1].strip():
-                lines.append("")
-            lines.append(f"{key}={value}")
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        os.environ[key] = value
-        self.settings = AppSettings.from_env(self.env_bootstrap.env_path)
-
-    def save_data_dir_to_env(self) -> None:
-        try:
-            data_dir = self._current_data_dir()
-        except ValueError as exc:
-            InfoBar.warning("数据目录无效", str(exc), parent=self, position=InfoBarPosition.TOP, duration=3000)
-            return
-
-        data_dir.mkdir(parents=True, exist_ok=True)
-        env_path = self.env_bootstrap.env_path
-        key = "SUBTITLE_COLLECTION_DATA_DIR"
-        value = str(data_dir)
-        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-        updated = False
-        for index, line in enumerate(lines):
-            if line.strip().startswith(f"{key}="):
-                lines[index] = f"{key}={value}"
-                updated = True
-                break
-        if not updated:
-            if lines and lines[-1].strip():
-                lines.append("")
-            lines.append(f"{key}={value}")
-
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        os.environ[key] = value
-        self.settings = AppSettings.from_env(self.env_bootstrap.env_path)
-        self.config_check = evaluate_config(self.settings, self.env_bootstrap.env_path)
-        self.storage = AppStorage(data_dir / "subtitle_info_collection.sqlite3")
-        self.refresh_history()
-        self.refresh_task_center()
-        InfoBar.success("已保存", f"数据目录已保存到 {env_path}", parent=self, position=InfoBarPosition.TOP, duration=3000)
 
     def reset_history(self) -> None:
         if self.collector_worker and self.collector_worker.isRunning():

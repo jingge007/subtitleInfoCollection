@@ -336,8 +336,6 @@ class TaskConfig:
     subtitle_providers: list[str] = field(  # 字幕源提供商列表
         default_factory=lambda: ["subhd", "subdl", "assrt", "opensubtitles"]
     )
-    fallback_enabled: bool = False  # 是否启用兜底
-    download_enabled: bool = True  # 是否启用下载
     subtitle_min_bilingual_ratio: float = 0.70  # 下载字幕内容双语条目最低占比
     request_interval_ms: int = 8_000  # 请求间隔（毫秒）
     movie_concurrency: int = 2  # 同时处理的电影数（1=串行）

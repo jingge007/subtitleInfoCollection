@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from subtitle_info_collection.config import AppSettings, bootstrap_env_file, evaluate_config
+from subtitle_info_collection.config import (
+    ENV_FIELD_META,
+    AppSettings,
+    bootstrap_env_file,
+    evaluate_config,
+    upsert_env_values,
+)
 
 
 ENV_KEYS = [
@@ -123,3 +129,75 @@ def test_app_settings_reads_and_clamps_subtitle_min_bilingual_ratio(tmp_path):
 
     env.write_text("SUBTITLE_MIN_BILINGUAL_RATIO=-0.25\n", encoding="utf-8")
     assert AppSettings.from_env(env).subtitle_min_bilingual_ratio == 0.0
+
+
+def test_upsert_env_values_preserves_comments_and_updates_secrets(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text(
+        "# TMDB_TOKEN：测试注释\n"
+        "TMDB_TOKEN=old-token\n"
+        "\n"
+        "# ASSRT_TOKEN：另一注释\n"
+        "ASSRT_TOKEN=\n",
+        encoding="utf-8",
+    )
+
+    upsert_env_values(
+        env,
+        {
+            "TMDB_TOKEN": "new-token",
+            "ASSRT_TOKEN": "assrt-secret",
+            "HTTP_PROXY": "http://127.0.0.1:7890",
+        },
+    )
+
+    text = env.read_text(encoding="utf-8")
+    assert "# TMDB_TOKEN：测试注释" in text
+    assert "TMDB_TOKEN=new-token" in text
+    assert "# ASSRT_TOKEN：另一注释" in text
+    assert "ASSRT_TOKEN=assrt-secret" in text
+    assert "HTTP_PROXY=http://127.0.0.1:7890" in text
+
+
+def test_app_settings_reads_automation_and_package_fields(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text(
+        "TODAYS_LINES_USERNAME=user@example.com\n"
+        "TODAYS_LINES_PASSWORD=secret\n"
+        "TODAYS_LINES_TOKEN=cached-token\n"
+        "TODAYS_LINES_TOKEN_TIME=123456\n"
+        "BAIDU_TRANSLATE_APP_ID=app-id\n"
+        "BAIDU_TRANSLATE_SECRET=app-secret\n"
+        "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR=D:\\dist\\app\n"
+        "SUBHD_CAPTCHA_OCR_MAX_ATTEMPTS=12\n"
+        "SUBHD_SEARCH_TIMEOUT=\n"
+        "PROVIDER_SEARCH_TIMEOUT=\n",
+        encoding="utf-8",
+    )
+
+    settings = AppSettings.from_env(env)
+    assert settings.todays_lines_username == "user@example.com"
+    assert settings.todays_lines_password == "secret"
+    assert settings.todays_lines_token == "cached-token"
+    assert settings.todays_lines_token_time == "123456"
+    assert settings.baidu_translate_app_id == "app-id"
+    assert settings.baidu_translate_secret == "app-secret"
+    assert settings.package_dist_dir == r"D:\dist\app"
+    assert settings.subhd_captcha_ocr_max_attempts == 12
+    assert settings.subhd_search_timeout == 120
+    assert settings.provider_search_timeout == 90
+
+
+def test_env_field_meta_covers_all_env_keys():
+    meta_keys = {item.key for item in ENV_FIELD_META}
+    assert meta_keys == set(ENV_KEYS)
+
+
+def test_app_settings_to_env_values_roundtrip_keys(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("TMDB_TOKEN=abc\nSUBTITLE_MOVIE_CONCURRENCY=3\n", encoding="utf-8")
+    settings = AppSettings.from_env(env)
+    values = settings.to_env_values()
+    assert set(ENV_KEYS).issubset(set(values))
+    assert values["TMDB_TOKEN"] == "abc"
+    assert values["SUBTITLE_MOVIE_CONCURRENCY"] == "3"

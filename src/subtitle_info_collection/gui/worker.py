@@ -25,6 +25,7 @@ from ..storage import AppStorage
 class CollectorWorker(QThread):
     log_message = Signal(str)
     progress_changed = Signal(int, int, str)
+    stats_changed = Signal(dict)
     verification_requested = Signal(dict)
     finished_success = Signal(dict)
     finished_error = Signal(str)
@@ -95,17 +96,30 @@ class CollectorWorker(QThread):
             return VerificationResult(refresh=True)
         return VerificationResult(code=self._verification_code)
 
+    # 转发编排器进度与实时统计到 GUI Signal
+    def _forward_progress(self, payload: dict) -> None:
+        if "current" in payload:
+            self.progress_changed.emit(
+                int(payload.get("current") or 0),
+                int(payload.get("total") or 0),
+                str(payload.get("currentMovie") or ""),
+            )
+        if any(key in payload for key in ("movieCount", "failedCount", "downloadCount")):
+            self.stats_changed.emit(
+                {
+                    "movieCount": int(payload.get("movieCount") or 0),
+                    "failedCount": int(payload.get("failedCount") or 0),
+                    "downloadCount": int(payload.get("downloadCount") or 0),
+                }
+            )
+
     def run(self) -> None:
         async def _run() -> None:
             storage = AppStorage(self.database_path)
             orchestrator = SubtitleCollectionOrchestrator(
                 storage=storage,
                 log=self.log_message.emit,
-                progress=lambda payload: self.progress_changed.emit(
-                    int(payload.get("current") or 0),
-                    int(payload.get("total") or 0),
-                    str(payload.get("currentMovie") or ""),
-                ),
+                progress=self._forward_progress,
                 request_verification=self._request_verification,
                 control=self._control,
             )

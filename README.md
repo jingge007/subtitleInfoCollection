@@ -97,7 +97,7 @@ HTTPS_PROXY=
 - `OPENSUBTITLES_BASE_URL` / `OPENSUBTITLES_USER_AGENT`：API 地址与 User-Agent；User-Agent 建议包含应用名与版本。
 - `TODAYS_LINES_USERNAME` / `TODAYS_LINES_PASSWORD`：33 台词自动化登录账号密码；仅自动化功能使用，本地 token 不可用时才用密码登录。
 - `TODAYS_LINES_TOKEN` / `TODAYS_LINES_TOKEN_TIME`：登录成功后由程序自动写入的缓存 token 与时间戳；手工可留空。
-- `BAIDU_TRANSLATE_APP_ID` / `BAIDU_TRANSLATE_SECRET`：百度翻译开放平台凭证，用于自动化脚本补全英文字幕；留空则跳过英文补全。
+- `BAIDU_TRANSLATE_APP_ID` / `BAIDU_TRANSLATE_SECRET`：百度翻译开放平台凭证，用于自动化脚本补全英文字幕（唯一翻译通道）；留空则跳过英文补全。
 - `SUBTITLE_PROVIDER_PRIORITY`：字幕源搜索优先级，逗号分隔，支持 `subhd`、`subdl`、`assrt`、`opensubtitles`，越靠前越优先。
 - `SUBTITLE_PROVIDER_DISABLED`：禁用的字幕源，逗号分隔；留空表示不额外禁用。
 - `SUBTITLE_REQUEST_INTERVAL_MS`：字幕源请求间隔（毫秒），降低限流/验证码概率；过低值会被程序限制到安全下限（不低于 12000）。
@@ -113,7 +113,8 @@ HTTPS_PROXY=
 - `SUBTITLE_COLLECTION_DATA_DIR`：运行数据目录（字幕输出、解析结果、本地数据库）；留空默认使用当前用户目录下的 `subtitleInfoCollection`。
 - `HTTP_PROXY` / `HTTPS_PROXY`：HTTP/HTTPS 代理，例如 `http://127.0.0.1:7890`；留空表示不使用代理。
 
-界面设置页只允许修改数据目录；密钥、请求间隔、代理和字幕源策略都从 `.env` 读取。  
+界面「配置项」页可查看并修改全部 `.env` 配置（含密钥与账号）；打开页时与 `.env` 对齐，保存后写回 `.env`（保留注释）。权威存储仍是本地 `.env`，密钥勿提交仓库。  
+「设置与维护」页仅用于重置历史、删除输出等数据维护。  
 开发运行：`.\scripts\run_dev.ps1`。打包：`.\scripts\build_windows.ps1`（会读取 `SUBTITLE_COLLECTION_PACKAGE_DIST_DIR`）。
 ## 启动应用
 
@@ -136,7 +137,7 @@ python -m subtitle_info_collection
 
 1. 打开“采集任务”页。
 2. 设置年份和 Top 数量。
-3. 选择字幕源，按需开启“源兜底”和“下载字幕”。
+3. 选择字幕源（采集时会自动下载字幕）。
 4. 点击“开始采集”。
 5. 下载校验会检查解压后的真实字幕文件，低于 100KB 的 ASS/SRT 会判定为无效电影字幕。
 6. 采集过程中可查看进度、结果摘要和日志。
@@ -156,14 +157,22 @@ python -m subtitle_info_collection
 
 打开“历史记录”页可查看最近的采集任务，包括年份、Top 数量、开始时间、结束时间和输出目录，时间按 `YYYY-MM-DD HH:mm:ss` 展示。
 
+### 配置项
+
+打开“配置项”页可以：
+
+- 按分组编辑全部 `.env` 配置（密钥与账号、字幕源策略、SubHD/验证码、网络与接口、本机与打包）。
+- 点击“保存全部”写回 `.env`；点击“重新加载”丢弃未保存编辑并重新对齐 `.env`。
+- 在“概览”查看配置预检状态。
+
 ### 设置和维护
 
-打开“设置”页可以：
+打开“设置与维护”页可以：
 
-- 修改数据目录并保存到 `.env`。
 - 点击“重置历史”清空采集历史记录，保留输出文件。
 - 点击“删除输出文件”删除 `数据目录/output`，并同时清空采集历史记录。
 
+数据目录、验证码提示音等运行配置请在“配置项”中修改。  
 “删除输出文件”不会删除 `数据目录/parsed`，也不会删除数据库文件、电影缓存或字幕候选缓存。
 
 ## 输出目录

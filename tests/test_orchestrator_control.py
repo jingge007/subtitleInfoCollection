@@ -118,7 +118,6 @@ def _config(tmp_path: Path, limit: int = 3) -> TaskConfig:
         limit=limit,
         request_interval_ms=0,
         movie_concurrency=1,
-        download_enabled=True,
         subtitle_providers=["assrt"],
         provider_priority=["assrt"],
         subtitle_min_bilingual_ratio=0.0,
@@ -176,6 +175,40 @@ async def test_abort_skips_remaining_movies(
     assert provider.search_titles == ["MovieA"]
     assert result["downloadCount"] == 1
     assert result["movieCount"] == 3
+
+
+@pytest.mark.asyncio
+async def test_live_stats_increment_on_movie_start_and_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    movies = [_movie("MovieA"), _movie("MovieB"), _movie("MovieC")]
+    provider = ControllableProvider()
+    _patch_orch(monkeypatch, movies, provider)
+    progress_payloads: list[dict] = []
+
+    orch = SubtitleCollectionOrchestrator(progress=progress_payloads.append)
+    result = await orch.run(_config(tmp_path))
+
+    assert result["runStatus"] == "completed"
+    assert result["downloadCount"] == 3
+    movie_counts = [
+        int(p["movieCount"])
+        for p in progress_payloads
+        if "movieCount" in p
+    ]
+    download_counts = [
+        int(p["downloadCount"])
+        for p in progress_payloads
+        if "downloadCount" in p
+    ]
+    # 电影按「采集：」开始逐步 +1，不应一次跳到总数
+    assert movie_counts
+    assert movie_counts[0] == 1
+    assert max(movie_counts) == 3
+    assert sorted(set(movie_counts)) == [1, 2, 3]
+    assert download_counts
+    assert max(download_counts) == 3
+    assert 1 in download_counts
 
 
 @pytest.mark.asyncio

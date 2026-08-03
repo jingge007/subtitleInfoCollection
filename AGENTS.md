@@ -70,7 +70,8 @@ gui/main_window → gui/worker (QThread + asyncio.run)
   2. `tests/test_config_checks.py` 中的 `ENV_KEYS`
   3. `README.md`「配置 .env」章节（配置项一览与配置说明）
 - `README.md` 的环境变量说明以 `.env.example` 为权威来源，禁止只改其一导致文档过期。
-- GUI 设置页原则上只改数据目录等有限项；Token、代理、字幕源优先级等仍以 `.env` 为准。
+- GUI「配置项」页可维护全部 `.env` 配置（含密钥）；权威存储仍是本地 `.env`，界面加载对齐并在保存后回写；密钥禁止提交仓库，`.env.example` 中密钥键继续留空。
+- GUI「设置与维护」页仅保留数据维护操作（重置历史、删除输出等）。
 
 ## 测试与运行
 
