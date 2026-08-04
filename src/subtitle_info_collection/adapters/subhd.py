@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -10,7 +11,7 @@ import httpx
 from datetime import datetime
 
 from ..errors import CollectorError, ErrorType
-from ..engines.scorer import normalize_text
+from ..engines.scorer import build_movie_search_keywords, normalize_text
 from ..engines.subtitle_engine import detect_subtitle_format
 from ..models import DownloadedPayload, MovieInfo, SubtitleCandidate, format_chinese_description
 from .base import DownloadContext, LogCallback, ProviderHealth
@@ -200,10 +201,14 @@ class SubhdProvider:
         else:
             logger.info("SubHD Playwright 复用已有浏览器")
 
-    # 将 Playwright context 中的 cookie 合并进共享 jar，供 httpx 下载 API 使用
-    async def _sync_playwright_cookies_to_shared(self) -> None:
+    # 将 Playwright context cookie 合并进目标 jar（默认共享 jar，搜索复用；下载可传按域 jar）
+    async def _sync_playwright_cookies_to_shared(
+        self,
+        target: httpx.Cookies | None = None,
+    ) -> None:
         if not self._browser_context:
             return
+        jar = target if target is not None else self._shared_cookies
         try:
             cookies = await self._browser_context.cookies()
             for item in cookies:
@@ -211,7 +216,7 @@ class SubhdProvider:
                 value = str(item.get("value") or "")
                 if not name:
                     continue
-                self._shared_cookies.set(
+                jar.set(
                     name,
                     value,
                     domain=str(item.get("domain") or ""),
@@ -304,7 +309,25 @@ class SubhdProvider:
                 await page.close()
                 return None
             if _is_expired_temp_page_text(html):
-                logger.info("SubHD Playwright /down still expired: %s", down_url)
+                logger.info("SubHD Playwright /down expired, re-prepare once: %s", down_url)
+                if context and context.log:
+                    context.log(f"SubHD Playwright /down 临时页失效，同域重新 prepare：{base_url}")
+                # 临时页失效后同域立即 re-prepare 再打开一次
+                retry_path = await self._prepare_download_via_playwright(
+                    base_url, subtitle_id, detail_url
+                )
+                if retry_path:
+                    down_url = urljoin(base_url + "/", retry_path.lstrip("/"))
+                    html = await self._navigate_with_challenge_handling(
+                        page, down_url, max_retries=2, wait_seconds=3
+                    )
+                    if (
+                        html
+                        and not _is_cloudflare_challenge_page(html)
+                        and not _is_expired_temp_page_text(html)
+                    ):
+                        return page
+                logger.info("SubHD Playwright /down still expired after re-prepare: %s", base_url)
                 if context and context.log:
                     context.log(f"SubHD Playwright /down 仍显示临时页失效：{base_url}")
                 await page.close()
@@ -366,7 +389,8 @@ class SubhdProvider:
             page = await self._open_down_page_via_playwright(base_url, subtitle_id, context)
             if page is None:
                 return None
-            await self._sync_playwright_cookies_to_shared()
+            # 同步到当前 httpx client 的按域 jar，避免污染其它镜像域名
+            await self._sync_playwright_cookies_to_shared(client.cookies)
             if context.log:
                 context.log(f"SubHD Playwright 调用下载 API：{base_url}")
 
@@ -593,9 +617,9 @@ class SubhdProvider:
     async def health(self) -> ProviderHealth:
         return ProviderHealth(self.id, enabled=True, healthy=True)
 
+    # 搜索关键词含原标题与「标题+年份」变体
     def _keywords(self, movie: MovieInfo) -> list[str]:
-        values = [movie.title_zh, movie.title, movie.original_title]
-        return list(dict.fromkeys([value for value in values if value and len(value.strip()) >= 2]))
+        return build_movie_search_keywords(movie)
 
     async def _navigate_with_challenge_handling(
         self,
@@ -1123,15 +1147,27 @@ class SubhdProvider:
             candidate.provider_subtitle_id, candidate.subtitle_title, base_urls_ordered,
         )
 
+        loop = asyncio.get_running_loop()
+        hard_fail_streak = 0
+        # 每个域名最多允许一次 Playwright 降级，避免首域失败后备用域无浏览器机会
+        playwright_bases_used: set[str] = set()
+
         for base_url in base_urls_ordered:
+            if context.deadline_monotonic is not None and loop.time() >= context.deadline_monotonic:
+                if context.log:
+                    context.log("SubHD 下载已达截止时间，停止尝试剩余域名")
+                break
+            allow_playwright = hard_fail_streak < 2 and base_url not in playwright_bases_used
             if context.log:
                 context.log(f"SubHD httpx 下载：{base_url}")
+            # 按域独立 cookie jar，避免 CF cookie 跨镜像污染导致 prepare 全失败
+            domain_cookies = httpx.Cookies()
             try:
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(self.timeout),
                     follow_redirects=True,
                     headers=BROWSER_HEADERS,
-                    cookies=self._shared_cookies,
+                    cookies=domain_cookies,
                     proxy=self.proxy,
                 ) as client:
                     # 可选搜索预热，失败忽略（与历史可用实现一致）
@@ -1144,11 +1180,21 @@ class SubhdProvider:
                     except Exception:
                         pass
 
-                    result = await self._download_via_api(client, base_url, candidate, context)
+                    result = await self._download_via_api(
+                        client,
+                        base_url,
+                        candidate,
+                        context,
+                        allow_playwright=allow_playwright,
+                    )
                     if result:
                         logger.info("SubHD download success: id=%s", candidate.provider_subtitle_id)
                         return result
+                    hard_fail_streak += 1
+                    if allow_playwright:
+                        playwright_bases_used.add(base_url)
             except Exception as exc:
+                hard_fail_streak += 1
                 logger.info(
                     "SubHD download failed: base=%s, id=%s, exc=%s",
                     base_url, candidate.provider_subtitle_id, exc,
@@ -1229,11 +1275,16 @@ class SubhdProvider:
         base_url: str,
         candidate: SubtitleCandidate,
         context: DownloadContext,
+        allow_playwright: bool = True,
     ) -> list[DownloadedPayload] | None:
         subtitle_id = candidate.provider_subtitle_id
         # 新站流程：详情页 → prepare-download → /down → /api/sub/down
         down_path = await self._prepare_download_session(client, base_url, subtitle_id, context)
         if not down_path:
+            if not allow_playwright:
+                if context.log:
+                    context.log(f"SubHD httpx prepare 失败，跳过浏览器降级：{base_url}")
+                return None
             if context.log:
                 context.log(f"SubHD httpx prepare 失败，改用浏览器下载：{base_url}")
             return await self._download_via_playwright_api(client, base_url, candidate, context)
@@ -1246,8 +1297,30 @@ class SubhdProvider:
         }
 
         down_html = await self._touch_down_page(client, base_url, subtitle_id, down_path=down_path)
+        # prepare 后临时页已失效：同域 re-prepare 一次再继续
+        if _is_expired_temp_page_text(down_html):
+            if context.log:
+                context.log(f"SubHD httpx /down 临时页失效，同域重新 prepare：{base_url}")
+            retry_path = await self._prepare_download_session(
+                client, base_url, subtitle_id, context
+            )
+            if retry_path:
+                down_path = retry_path
+                down_url = urljoin(base_url + "/", down_path.lstrip("/"))
+                headers = {
+                    **API_HEADERS,
+                    "Origin": base_url,
+                    "Referer": down_url,
+                }
+                down_html = await self._touch_down_page(
+                    client, base_url, subtitle_id, down_path=down_path
+                )
         # prepare 后 /down 仍被 CF 或失效页拦截时，改走浏览器完整流程
         if _is_cloudflare_challenge_page(down_html) or _is_expired_temp_page_text(down_html):
+            if not allow_playwright:
+                if context.log:
+                    context.log(f"SubHD httpx /down 不可用，跳过浏览器降级：{base_url}")
+                return None
             if context.log:
                 context.log(f"SubHD httpx /down 不可用，改用浏览器下载：{base_url}")
             return await self._download_via_playwright_api(client, base_url, candidate, context)
@@ -1274,6 +1347,7 @@ class SubhdProvider:
 
         captcha_code = ""
         playwright_download_tried = False
+        reprepare_tried = False
         for attempt in range(3):
             body = {"sid": subtitle_id, "cap": captcha_code}
             try:
@@ -1288,7 +1362,7 @@ class SubhdProvider:
                 logger.info("SubHD api/sub/down failed: base=%s, attempt=%d, exc=%s", base_url, attempt + 1, exc)
                 if context.log:
                     context.log(f"SubHD API 下载请求失败（{base_url}）：{exc}")
-                if not playwright_download_tried:
+                if allow_playwright and not playwright_download_tried:
                     playwright_download_tried = True
                     if context.log:
                         context.log(f"SubHD httpx API 失败，改用浏览器下载：{base_url}")
@@ -1360,7 +1434,28 @@ class SubhdProvider:
                     logger.info("SubHD api/sub/down 请求失败 (第 %d 次尝试): %s", attempt + 1, server_msg)
                     if context.log:
                         context.log(f"SubHD API 拒绝下载（{base_url}）：{server_msg[:200]}")
-                if _is_expired_temp_page_text(server_msg) and not playwright_download_tried:
+                # API 提示临时页失效：先同域 re-prepare，再考虑 Playwright
+                if _is_expired_temp_page_text(server_msg) and not reprepare_tried:
+                    reprepare_tried = True
+                    if context.log:
+                        context.log(f"SubHD API 临时页失效，同域重新 prepare：{base_url}")
+                    retry_path = await self._prepare_download_session(
+                        client, base_url, subtitle_id, context
+                    )
+                    if retry_path:
+                        down_path = retry_path
+                        down_url = urljoin(base_url + "/", down_path.lstrip("/"))
+                        headers = {
+                            **API_HEADERS,
+                            "Origin": base_url,
+                            "Referer": down_url,
+                        }
+                        await self._touch_down_page(
+                            client, base_url, subtitle_id, down_path=down_path
+                        )
+                        captcha_code = ""
+                        continue
+                if _is_expired_temp_page_text(server_msg) and allow_playwright and not playwright_download_tried:
                     playwright_download_tried = True
                     if context.log:
                         context.log(f"SubHD 临时页失效，改用浏览器页内下载：{base_url}")

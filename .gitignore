@@ -45,3 +45,5 @@ Thumbs.db
 .junie/
 .workbuddy/
 .trae/
+# JVM HotSpot 编译器回放日志（IDE/MCP 等 Java 进程产生）
+replay_pid*.log

@@ -104,14 +104,22 @@ class CollectorWorker(QThread):
                 int(payload.get("total") or 0),
                 str(payload.get("currentMovie") or ""),
             )
-        if any(key in payload for key in ("movieCount", "failedCount", "downloadCount")):
-            self.stats_changed.emit(
-                {
-                    "movieCount": int(payload.get("movieCount") or 0),
-                    "failedCount": int(payload.get("failedCount") or 0),
-                    "downloadCount": int(payload.get("downloadCount") or 0),
-                }
-            )
+        if any(
+            key in payload
+            for key in ("movieCount", "failedCount", "downloadCount", "downloadDir", "providerStats")
+        ):
+            stats: dict[str, object] = {
+                "movieCount": int(payload.get("movieCount") or 0),
+                "failedCount": int(payload.get("failedCount") or 0),
+                "downloadCount": int(payload.get("downloadCount") or 0),
+            }
+            download_dir = str(payload.get("downloadDir") or "").strip()
+            if download_dir:
+                stats["downloadDir"] = download_dir
+            provider_stats = payload.get("providerStats")
+            if isinstance(provider_stats, dict):
+                stats["providerStats"] = provider_stats
+            self.stats_changed.emit(stats)
 
     def run(self) -> None:
         async def _run() -> None:
@@ -135,6 +143,7 @@ class CollectorWorker(QThread):
 class ParserWorker(QThread):
     log_message = Signal(str)
     progress_changed = Signal(int, int, str)
+    stats_changed = Signal(dict)
     finished_success = Signal(dict)
     finished_error = Signal(str)
 
@@ -160,6 +169,14 @@ class ParserWorker(QThread):
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
             total = len(self.files)
+            # 开始时推送总数，成功/失败从 0 起实时累加
+            self.stats_changed.emit(
+                {
+                    "totalCount": total,
+                    "successCount": 0,
+                    "failureCount": 0,
+                }
+            )
             for index, path in enumerate(self.files, start=1):
                 self.progress_changed.emit(index - 1, total, path.name)
                 try:
@@ -175,6 +192,13 @@ class ParserWorker(QThread):
                     self.log_message.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 解析失败：{path.name} / {exc}")
                     failure_count += 1
                     self.progress_changed.emit(index, total, path.name)
+                self.stats_changed.emit(
+                    {
+                        "totalCount": total,
+                        "successCount": success_count,
+                        "failureCount": failure_count,
+                    }
+                )
 
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             movies_export = write_movie_export_files(

@@ -48,6 +48,8 @@ class DownloadContext:
     log: LogCallback | None = None  # 日志回调
     captcha_ocr_enabled: bool = True
     captcha_auto_submit_min_confidence: float = 0.85
+    # 下载截止单调时钟（asyncio loop.time）；超时后 SubHD 停止剩余域名尝试
+    deadline_monotonic: float | None = None
 
 
 class ProviderAdapter(Protocol):

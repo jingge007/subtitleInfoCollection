@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 import httpx
 
 from ..errors import CollectorError, ErrorType
+from ..engines.scorer import build_movie_search_keywords
 from ..engines.subtitle_engine import detect_subtitle_format
 from ..models import (
     DownloadedPayload,
@@ -65,9 +66,9 @@ class AssrtProvider:
             await asyncio.sleep(remaining / 1000)
         self._last_request = asyncio.get_running_loop().time()
 
+    # 搜索关键词含原标题与「标题+年份」变体
     def _keywords(self, movie: MovieInfo) -> list[str]:
-        values = [movie.title_zh, movie.title, movie.original_title]
-        return list(dict.fromkeys([value for value in values if value and len(value.strip()) >= 2]))
+        return build_movie_search_keywords(movie)
 
     def _emit(
         self,

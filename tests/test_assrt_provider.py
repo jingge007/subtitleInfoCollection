@@ -36,5 +36,7 @@ async def test_assrt_search_retries_connect_error_and_logs_readable_message():
     result = await provider.search(movie(), log=logs.append)
 
     assert result == []
-    assert attempts == 3
+    # 首个关键词 ConnectError 重试 2 次后空结果，再试「标题+年份」关键词 1 次
+    assert attempts == 4
     assert any("assrt.search.retry" in item and "ConnectError" in item for item in logs)
+    assert any("Shawshank 1994" in item for item in logs)

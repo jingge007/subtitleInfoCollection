@@ -66,7 +66,7 @@ BAIDU_TRANSLATE_SECRET=
 # 采集策略与 SubHD
 SUBTITLE_PROVIDER_PRIORITY=subhd,subdl,assrt,opensubtitles
 SUBTITLE_PROVIDER_DISABLED=
-SUBTITLE_REQUEST_INTERVAL_MS=13000
+SUBTITLE_REQUEST_INTERVAL_MS=8000
 SUBTITLE_MOVIE_CONCURRENCY=2
 SUBTITLE_MIN_BILINGUAL_RATIO=0.70
 SUBHD_CAPTCHA_OCR_ENABLED=true
@@ -74,6 +74,8 @@ SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE=0.85
 SUBHD_CAPTCHA_OCR_MAX_ATTEMPTS=
 SUBHD_SEARCH_TIMEOUT=120
 PROVIDER_SEARCH_TIMEOUT=90
+SUBHD_DOWNLOAD_TIMEOUT=180
+PROVIDER_DOWNLOAD_TIMEOUT=60
 CAPTCHA_SOUND_ENABLED=true
 
 # 目录与代理
@@ -100,7 +102,7 @@ HTTPS_PROXY=
 - `BAIDU_TRANSLATE_APP_ID` / `BAIDU_TRANSLATE_SECRET`：百度翻译开放平台凭证，用于自动化脚本补全英文字幕（唯一翻译通道）；留空则跳过英文补全。
 - `SUBTITLE_PROVIDER_PRIORITY`：字幕源搜索优先级，逗号分隔，支持 `subhd`、`subdl`、`assrt`、`opensubtitles`，越靠前越优先。
 - `SUBTITLE_PROVIDER_DISABLED`：禁用的字幕源，逗号分隔；留空表示不额外禁用。
-- `SUBTITLE_REQUEST_INTERVAL_MS`：字幕源请求间隔（毫秒），降低限流/验证码概率；过低值会被程序限制到安全下限（不低于 12000）。
+- `SUBTITLE_REQUEST_INTERVAL_MS`：字幕源请求间隔（毫秒），降低限流/验证码概率；过低值会被程序限制到安全下限（不低于 8000）。SubHD 若频繁验证码可在本地调高到 12000～15000。
 - `SUBTITLE_MOVIE_CONCURRENCY`：同时处理的电影数（1～4）；默认 `2` 为有限并发，`1` 为串行（旧行为）。
 - `SUBTITLE_MIN_BILINGUAL_RATIO`：下载后双语条目最低占比（0.0–1.0）；`0.70` 表示至少 70% 有效条目须同时含简体中文与英文。
 - `SUBHD_CAPTCHA_OCR_ENABLED`：是否启用 SubHD 验证码辅助识别；`true` 尝试自动识别，`false` 需人工输入。图片 OCR 需本机安装对应 OCR 依赖与 Tesseract。
@@ -108,6 +110,8 @@ HTTPS_PROXY=
 - `SUBHD_CAPTCHA_OCR_MAX_ATTEMPTS`：OCR 最大尝试次数；留空则按预处理 × PSM × 白名单组合自动计算（通常约 30–50 次）。
 - `SUBHD_SEARCH_TIMEOUT`：SubHD 单次搜索超时（秒）；建议不低于 60，留空默认 120。
 - `PROVIDER_SEARCH_TIMEOUT`：非 SubHD 源（SubDL、ASSRT、OpenSubtitles）单次搜索超时（秒）；留空默认 90。
+- `SUBHD_DOWNLOAD_TIMEOUT`：SubHD 单次下载硬超时（秒）；超时后停止多域名尝试并换候选/换源；留空默认 180。
+- `PROVIDER_DOWNLOAD_TIMEOUT`：非 SubHD 源单次下载硬超时（秒）；留空默认 60。
 - `CAPTCHA_SOUND_ENABLED`：验证码弹出时是否播放系统提示音；即使静默仍会托盘通知与任务栏闪烁。
 - `SUBTITLE_COLLECTION_PACKAGE_DIST_DIR`：Windows 打包产物输出目录，只影响 `scripts/build_windows.ps1` / `字幕采集工具.spec`；留空默认 `项目目录/dist/字幕采集工具`。可填最终目录（如 `D:\软件\字幕采集工具`），或父级目录（如 `D:\软件`，则输出为 `D:\软件\字幕采集工具`）；相对路径按项目根解析。
 - `SUBTITLE_COLLECTION_DATA_DIR`：运行数据目录（字幕输出、解析结果、本地数据库）；留空默认使用当前用户目录下的 `subtitleInfoCollection`。

@@ -39,6 +39,8 @@ ENV_KEYS = [
     "SUBHD_CAPTCHA_OCR_MAX_ATTEMPTS",
     "SUBHD_SEARCH_TIMEOUT",
     "PROVIDER_SEARCH_TIMEOUT",
+    "SUBHD_DOWNLOAD_TIMEOUT",
+    "PROVIDER_DOWNLOAD_TIMEOUT",
     "CAPTCHA_SOUND_ENABLED",
     "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR",
     "SUBTITLE_COLLECTION_DATA_DIR",
@@ -186,6 +188,16 @@ def test_app_settings_reads_automation_and_package_fields(tmp_path):
     assert settings.subhd_captcha_ocr_max_attempts == 12
     assert settings.subhd_search_timeout == 120
     assert settings.provider_search_timeout == 90
+    assert settings.subhd_download_timeout == 180
+    assert settings.provider_download_timeout == 60
+
+
+def test_app_settings_clamps_request_interval_floor(tmp_path):
+    from subtitle_info_collection.config import MIN_REQUEST_INTERVAL_MS
+
+    env = tmp_path / ".env"
+    env.write_text("SUBTITLE_REQUEST_INTERVAL_MS=1000\n", encoding="utf-8")
+    assert AppSettings.from_env(env).request_interval_ms == MIN_REQUEST_INTERVAL_MS
 
 
 def test_env_field_meta_covers_all_env_keys():

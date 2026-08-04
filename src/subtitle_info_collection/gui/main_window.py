@@ -11,9 +11,10 @@ from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QPainter, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QAbstractItemView,
     QApplication,
     QDialog,
@@ -133,6 +134,16 @@ def _flash_taskbar(window_handle: int) -> None:
         pass
 
 
+# 可点击的任务状态统计卡（用于成功数跳转输出目录）
+class ClickableStatCard(QFrame):
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class MainWindow(FluentWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -155,6 +166,8 @@ class MainWindow(FluentWindow):
         self._verification_refresh_btn: TransparentToolButton | None = None
         self._verification_code_input: LineEdit | None = None
         self._verification_ocr_label: CaptionLabel | None = None
+        self._collect_download_dir: Path | None = None
+        self._parse_output_dir: Path | None = None
         self._collect_elapsed_ms = 0
         self._collect_elapsed_running = False
         self._collect_elapsed_last_tick: float | None = None
@@ -220,6 +233,7 @@ class MainWindow(FluentWindow):
         self.navigationInterface.setExpandWidth(200)
         # 启动时默认展开侧边栏（否则宽窗口下仍保持收起态）
         self.navigationInterface.expand(useAni=False)
+        self._apply_pointing_hand_cursors()
         self.refresh_history()
         self.refresh_task_center()
 
@@ -259,6 +273,81 @@ class MainWindow(FluentWindow):
         layout.setContentsMargins(*PAGE_MARGINS)
         layout.setSpacing(PAGE_SPACING)
         return layout
+
+    # 构建任务状态统计卡；可点时用手型光标并绑定点击回调
+    def _make_stat_card(
+        self,
+        *,
+        caption: str,
+        color: str,
+        bg_color: str,
+        width: int = 72,
+        initial_text: str = "0",
+        clickable: bool = False,
+        tooltip: str = "",
+        on_click=None,
+    ) -> tuple[QFrame, QLabel]:
+        if clickable:
+            stat_card: QFrame = ClickableStatCard(self)
+            stat_card.setCursor(Qt.PointingHandCursor)
+            if tooltip:
+                stat_card.setToolTip(tooltip)
+            if on_click is not None:
+                stat_card.clicked.connect(on_click)
+        else:
+            stat_card = QFrame(self)
+        stat_card.setStyleSheet(
+            f"background: {bg_color}; border: none; border-radius: 8px;"
+        )
+        stat_card.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        stat_card.setFixedWidth(width)
+        stat_card.setFixedHeight(48)
+        stat_layout = QVBoxLayout(stat_card)
+        stat_layout.setContentsMargins(8, 5, 8, 5)
+        stat_layout.setSpacing(1)
+        stat_layout.setAlignment(Qt.AlignCenter)
+        value_label = QLabel(initial_text)
+        value_label.setAlignment(Qt.AlignCenter)
+        value_label.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
+        value_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        caption_label = QLabel(caption)
+        caption_label.setAlignment(Qt.AlignCenter)
+        caption_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
+        caption_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        stat_layout.addWidget(value_label)
+        stat_layout.addWidget(caption_label)
+        return stat_card, value_label
+
+    # 构建字幕源采集命中色块（横排区分不同源）
+    def _make_provider_hit_card(
+        self,
+        *,
+        provider_label: str,
+        bg_color: str,
+        text_color: str,
+    ) -> tuple[QFrame, StrongBodyLabel]:
+        hit_card = QFrame(self)
+        hit_card.setObjectName("providerHitCard")
+        hit_card.setStyleSheet(
+            f"background: {bg_color}; border: none; border-radius: 6px;"
+        )
+        hit_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        hit_card.setFixedHeight(36)
+        hit_layout = QHBoxLayout(hit_card)
+        hit_layout.setContentsMargins(8, 0, 8, 0)
+        hit_layout.setSpacing(0)
+        hit_label = StrongBodyLabel(f"{provider_label} 成功采集0条")
+        hit_label.setAlignment(Qt.AlignCenter)
+        hit_label.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {text_color};")
+        hit_layout.addWidget(hit_label)
+        return hit_card, hit_label
+
+    # 为全窗口可点击控件统一设置手型光标
+    def _apply_pointing_hand_cursors(self) -> None:
+        for button in self.findChildren(QAbstractButton):
+            button.setCursor(Qt.PointingHandCursor)
+        for card in self.findChildren(ClickableStatCard):
+            card.setCursor(Qt.PointingHandCursor)
 
     def _scroll_page(self, object_name: str) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
         scroll_area = QScrollArea(self)
@@ -321,43 +410,6 @@ class MainWindow(FluentWindow):
         layout.addLayout(text_col, 1)
         return card, value, caption
 
-    def _status_badge(self, text: str, ok: bool | None = True) -> QLabel:
-        badge = QLabel(text)
-        if ok is True:
-            badge.setStyleSheet(
-                f"background: {GREEN_SOFT}; color: {GREEN}; border-radius: 8px; "
-                f"padding: 3px 10px; font-size: 12px; font-weight: 700;"
-            )
-        elif ok is False:
-            badge.setStyleSheet(
-                f"background: {ORANGE_SOFT}; color: {ORANGE}; border-radius: 8px; "
-                f"padding: 3px 10px; font-size: 12px; font-weight: 700;"
-            )
-        else:
-            badge.setStyleSheet(
-                f"background: {PRIMARY_SOFT}; color: {PRIMARY}; border-radius: 8px; "
-                f"padding: 3px 10px; font-size: 12px; font-weight: 700;"
-            )
-        return badge
-
-    def _status_card(self, title: str, value: str, detail: str, ok: bool | None = True) -> CardWidget:
-        card = CardWidget(self)
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(3)
-        heading = StrongBodyLabel(title)
-        heading.setStyleSheet(f"font-size: 13px; color: {TEXT};")
-        badge = self._status_badge(value, ok)
-        body = CaptionLabel(detail)
-        body.setWordWrap(True)
-        body.setMinimumWidth(0)
-        body.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        layout.addWidget(heading)
-        layout.addWidget(badge)
-        layout.addWidget(body)
-        return card
-
     def _clear_layout(self, layout) -> None:
         while layout.count():
             item = layout.takeAt(0)
@@ -395,7 +447,7 @@ class MainWindow(FluentWindow):
         title_col.setSpacing(2)
         title = SubtitleLabel("任务工作台")
         title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT};")
-        subtitle = BodyLabel("集中查看字幕源状态、近期任务和输出位置")
+        subtitle = BodyLabel("集中查看配置预检、近期任务和输出位置")
         subtitle.setStyleSheet(f"color: {TEXT_PLACEHOLDER}; font-size: 12px;")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
@@ -430,10 +482,18 @@ class MainWindow(FluentWindow):
             self.metric_labels[key] = value_label
             metrics_row.addWidget(card, 1)
 
-        source_card = self._card("字幕源状态")
-        self.source_status_layout = QHBoxLayout()
-        self.source_status_layout.setSpacing(10)
-        source_card.viewLayout.addLayout(self.source_status_layout)
+        precheck_card = self._card("配置预检")
+        tip = CaptionLabel(
+            "以下状态来自当前 .env；保存配置后会自动刷新。进行中的任务不会热替换配置。"
+        )
+        tip.setObjectName("configPrecheckTip")
+        tip.setStyleSheet(f"color: {TEXT_SOFT};")
+        tip.setWordWrap(True)
+        # 说明放在「配置预检」标题右侧
+        precheck_card.headerLayout.addWidget(tip, 1)
+        self.config_precheck_layout = QGridLayout()
+        self.config_precheck_layout.setSpacing(PAGE_SPACING)
+        precheck_card.viewLayout.addLayout(self.config_precheck_layout)
 
         output_card = self._card("输出与维护")
         output_inner = QVBoxLayout()
@@ -464,14 +524,14 @@ class MainWindow(FluentWindow):
 
         layout.addLayout(header)
         layout.addLayout(metrics_row)
-        layout.addWidget(source_card, 1)
+        layout.addWidget(precheck_card, 1)
         layout.addWidget(output_card)
         return page
 
     # ── Dashboard Refresh ─────────────────────────────────────────────
 
     def refresh_task_center(self) -> None:
-        if not hasattr(self, "source_status_layout"):
+        if not hasattr(self, "config_precheck_layout"):
             return
         self.settings = AppSettings.from_env(self.env_bootstrap.env_path)
         self.config_check = evaluate_config(self.settings, self.env_bootstrap.env_path)
@@ -489,7 +549,7 @@ class MainWindow(FluentWindow):
                 self.dashboard_ready_label, "配置待完善", False
             )
 
-        self._refresh_source_status()
+        self._refresh_config_precheck()
 
         package_path = self.task_summary.get("package_path") or ""
         self.latest_output_label.setText(package_path or f"数据目录：{self.settings.data_dir}")
@@ -514,6 +574,90 @@ class MainWindow(FluentWindow):
                 f"padding: 4px 12px; font-size: 12px; font-weight: 700;"
             )
         return label
+
+    # 刷新工作台配置预检卡片
+    def _refresh_config_precheck(self) -> None:
+        self._clear_layout(self.config_precheck_layout)
+        config_check = self.config_check
+        cards = [
+            self._precheck_status_card(
+                "就绪状态",
+                "就绪" if config_check.ready else "待完善",
+                "采集前请确保 TMDb 与至少一个字幕源已配置",
+                config_check.ready,
+            ),
+            self._precheck_status_card(
+                "TMDb",
+                "已配置" if config_check.tmdb_configured else "未配置",
+                "TMDB_TOKEN",
+                config_check.tmdb_configured,
+            ),
+            self._precheck_status_card(
+                "字幕源",
+                f"{config_check.configured_provider_count}/{config_check.enabled_provider_count}",
+                "已配置 / 已启用",
+                config_check.configured_provider_count > 0,
+            ),
+            self._precheck_status_card(
+                ".env",
+                "存在" if config_check.env_exists else "缺失",
+                str(config_check.env_path),
+                config_check.env_exists,
+            ),
+            self._precheck_status_card(
+                "请求间隔",
+                f"{config_check.request_interval_ms} ms",
+                "SUBTITLE_REQUEST_INTERVAL_MS",
+                None,
+            ),
+            self._precheck_status_card(
+                "电影并发",
+                f"{config_check.movie_concurrency}",
+                "SUBTITLE_MOVIE_CONCURRENCY（1～4）",
+                None,
+            ),
+            self._precheck_status_card(
+                "代理",
+                "已启用" if config_check.proxies_configured else "未启用",
+                "HTTP_PROXY / HTTPS_PROXY",
+                None,
+            ),
+            self._precheck_status_card(
+                "数据目录",
+                "存在" if config_check.data_dir_exists else "将创建",
+                str(config_check.data_dir),
+                config_check.data_dir_exists if config_check.data_dir_exists else None,
+            ),
+        ]
+        for index, card in enumerate(cards):
+            self.config_precheck_layout.addWidget(card, index // 3, index % 3)
+
+    # 构建配置预检状态卡（标题 / 着色值 / 说明）
+    def _precheck_status_card(
+        self, title: str, value: str, detail: str, ok: bool | None = True
+    ) -> CardWidget:
+        card = CardWidget(self)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        card.setMinimumHeight(72)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+        title_label = CaptionLabel(title)
+        title_label.setStyleSheet(f"color: {TEXT_SOFT};")
+        value_label = StrongBodyLabel(value)
+        if ok is True:
+            value_label.setStyleSheet(f"color: {GREEN}; font-size: 15px;")
+        elif ok is False:
+            value_label.setStyleSheet(f"color: {ORANGE}; font-size: 15px;")
+        else:
+            value_label.setStyleSheet(f"color: {PRIMARY}; font-size: 15px;")
+        detail_label = CaptionLabel(detail)
+        detail_label.setWordWrap(True)
+        detail_label.setStyleSheet(f"color: {TEXT_PLACEHOLDER};")
+        layout.addWidget(title_label)
+        layout.addWidget(value_label)
+        layout.addWidget(detail_label)
+        return card
 
     def _refresh_latest_records(self) -> None:
         if not hasattr(self, "latest_records_layout"):
@@ -561,27 +705,6 @@ class MainWindow(FluentWindow):
             self.latest_records_layout.addWidget(card)
         self.latest_records_layout.addStretch(1)
 
-    def _refresh_source_status(self) -> None:
-        self._clear_layout(self.source_status_layout)
-        health = self.task_summary.get("source_health") or {}
-        stats = self.task_summary.get("provider_stats") or {}
-        for index, provider in enumerate(self.config_check.providers):
-            provider_health = health.get(provider.id, {})
-            provider_stats = stats.get(provider.id, {})
-            if provider_health:
-                healthy = bool(provider_health.get("healthy"))
-                status = "健康" if healthy else "异常"
-                ok = True if healthy else False
-                detail = provider_health.get("message") or f"命中 {provider_stats.get('hitCount', 0)} 条"
-            else:
-                configured = provider.enabled and provider.configured
-                status = "已配置" if configured else "待配置"
-                ok = configured if configured else False
-                detail = provider.detail
-            self.source_status_layout.addWidget(
-                self._status_card(provider.label, status, detail, ok),
-            )
-
     # ── Config Page ────────────────────────────────────────────────────
 
     def _build_config_page(self) -> QWidget:
@@ -594,23 +717,24 @@ class MainWindow(FluentWindow):
         )
         layout.addWidget(self.config_editor)
         self.config_editor.load_from_settings(self.settings)
-        self.config_editor.refresh_overview(self.config_check)
         return page
 
-    # 刷新配置预检概览（不覆盖表单中未保存的编辑）
+    # 按当前 .env 刷新配置表单与工作台预检（不覆盖表单中未保存的编辑）
     def refresh_config_page(self) -> None:
         if not hasattr(self, "config_editor"):
             return
         self.settings = AppSettings.from_env(self.env_bootstrap.env_path)
         self.config_check = evaluate_config(self.settings, self.env_bootstrap.env_path)
-        self.config_editor.refresh_overview(self.config_check)
+        if hasattr(self, "config_precheck_layout"):
+            self._refresh_config_precheck()
 
     # 丢弃未保存编辑，按当前 .env 重新对齐表单
     def reload_config_from_env(self) -> None:
         self.settings = AppSettings.from_env(self.env_bootstrap.env_path)
         self.config_check = evaluate_config(self.settings, self.env_bootstrap.env_path)
         self.config_editor.load_from_settings(self.settings)
-        self.config_editor.refresh_overview(self.config_check)
+        if hasattr(self, "config_precheck_layout"):
+            self._refresh_config_precheck()
         InfoBar.success(
             "已重新加载",
             "表单已与当前 .env 对齐。",
@@ -655,7 +779,6 @@ class MainWindow(FluentWindow):
         self.config_check = evaluate_config(self.settings, env_path)
         self.storage = AppStorage(self.settings.database_path)
         self.config_editor.load_from_settings(self.settings)
-        self.config_editor.refresh_overview(self.config_check)
         self.refresh_history()
         self.refresh_task_center()
         InfoBar.success(
@@ -673,6 +796,20 @@ class MainWindow(FluentWindow):
             QMessageBox.warning(self, "路径不存在", f"路径不存在：{path}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    # 打开当前采集任务的字幕输出目录（成功数卡片点击）
+    def open_collect_download_dir(self) -> None:
+        if self._collect_download_dir is not None:
+            self.open_path(self._collect_download_dir)
+            return
+        self.open_path(self.settings.output_dir)
+
+    # 打开字幕解析输出目录（成功数卡片点击）
+    def open_parse_output_dir(self) -> None:
+        if self._parse_output_dir is not None:
+            self.open_path(self._parse_output_dir)
+            return
+        self.open_path(self._current_data_dir() / "parsed")
 
     def open_latest_output_dir(self) -> None:
         package_path = self.task_summary.get("package_path") or ""
@@ -764,8 +901,11 @@ class MainWindow(FluentWindow):
             "assrt": self.assrt_check,
             "opensubtitles": self.opensubtitles_check,
         }
+        self.provider_checks = provider_checks
         for provider, checkbox in provider_checks.items():
             checkbox.setChecked(provider not in disabled_providers)
+            # 勾选变化时同步标题行命中色块显隐
+            checkbox.toggled.connect(self._sync_provider_hit_cards_visibility)
         row2.addWidget(source_label)
         row2.addWidget(self.subhd_check)
         row2.addWidget(self.subdl_check)
@@ -781,6 +921,32 @@ class MainWindow(FluentWindow):
         monitor_col.setSpacing(8)
 
         status_card = self._card("任务状态")
+        provider_hits_panel = QWidget(self)
+        provider_hits_panel.setObjectName("collectProviderHitsPanel")
+        provider_hits_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        provider_hits_layout = QHBoxLayout(provider_hits_panel)
+        provider_hits_layout.setContentsMargins(8, 0, 0, 0)
+        provider_hits_layout.setSpacing(6)
+        self.collect_provider_hit_labels: dict[str, StrongBodyLabel] = {}
+        self.collect_provider_hit_cards: dict[str, QFrame] = {}
+        for provider_id, provider_label, bg_color, text_color in [
+            ("subhd", "SubHD", PRIMARY_SOFT, PRIMARY),
+            ("subdl", "SubDL", GREEN_SOFT, GREEN),
+            ("assrt", "ASSRT", ORANGE_SOFT, ORANGE),
+            ("opensubtitles", "OpenSubtitles", RED_SOFT, RED),
+        ]:
+            hit_card, hit_label = self._make_provider_hit_card(
+                provider_label=provider_label,
+                bg_color=bg_color,
+                text_color=text_color,
+            )
+            self.collect_provider_hit_labels[provider_id] = hit_label
+            self.collect_provider_hit_cards[provider_id] = hit_card
+            provider_hits_layout.addWidget(hit_card, 1)
+        # 命中色块放在「任务状态」标题右侧水平对齐
+        status_card.headerLayout.addWidget(provider_hits_panel, 1)
+        self._sync_provider_hit_cards_visibility()
+
         status_inner = QVBoxLayout()
         status_inner.setSpacing(8)
 
@@ -823,31 +989,24 @@ class MainWindow(FluentWindow):
         stats_row.setSpacing(6)
 
         self.collect_stat_labels: dict[str, QLabel] = {}
-        stat_items = [
-            ("movies", "电影", PRIMARY, PRIMARY_SOFT),
-            ("failed", "失败", RED, RED_SOFT),
-            ("downloaded", "下载", GREEN, GREEN_SOFT),
-        ]
-        for key, label_text, color, bg_color in stat_items:
-            stat_card = QFrame(self)
-            stat_card.setStyleSheet(
-                f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+        self._collect_success_stat_card: ClickableStatCard | None = None
+        for key, label_text, color, bg_color, clickable in [
+            ("movies", "电影", PRIMARY, PRIMARY_SOFT, False),
+            ("failed", "失败", RED, RED_SOFT, False),
+            ("downloaded", "成功", GREEN, GREEN_SOFT, True),
+            ("accuracy", "准确率", ORANGE, ORANGE_SOFT, False),
+        ]:
+            stat_card, value_label = self._make_stat_card(
+                caption=label_text,
+                color=color,
+                bg_color=bg_color,
+                initial_text="0%" if key == "accuracy" else "0",
+                clickable=clickable,
+                tooltip="点击打开采集输出目录" if clickable else "",
+                on_click=self.open_collect_download_dir if clickable else None,
             )
-            stat_card.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            stat_card.setFixedWidth(72)
-            stat_card.setFixedHeight(48)
-            stat_layout = QVBoxLayout(stat_card)
-            stat_layout.setContentsMargins(8, 5, 8, 5)
-            stat_layout.setSpacing(1)
-            stat_layout.setAlignment(Qt.AlignCenter)
-            value_label = QLabel("0")
-            value_label.setAlignment(Qt.AlignCenter)
-            value_label.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
-            caption_label = QLabel(label_text)
-            caption_label.setAlignment(Qt.AlignCenter)
-            caption_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
-            stat_layout.addWidget(value_label)
-            stat_layout.addWidget(caption_label)
+            if clickable and isinstance(stat_card, ClickableStatCard):
+                self._collect_success_stat_card = stat_card
             self.collect_stat_labels[key] = value_label
             stats_row.addWidget(stat_card)
 
@@ -958,56 +1117,30 @@ class MainWindow(FluentWindow):
         stats_row = QHBoxLayout()
         stats_row.setSpacing(6)
         self.parse_stat_labels: dict[str, QLabel] = {}
-        for key, caption, color, bg_color, width in [
-            ("total", "字幕文件", PRIMARY, PRIMARY_SOFT, 82),
-            ("success", "成功", GREEN, GREEN_SOFT, 72),
-            ("failed", "失败", RED, RED_SOFT, 72),
-            ("exported", "导出条数", ORANGE, ORANGE_SOFT, 88),
+        self._parse_success_stat_card: ClickableStatCard | None = None
+        for key, caption, color, bg_color, width, clickable in [
+            ("total", "字幕文件", PRIMARY, PRIMARY_SOFT, 82, False),
+            ("success", "成功", GREEN, GREEN_SOFT, 72, True),
+            ("failed", "失败", RED, RED_SOFT, 72, False),
+            ("exported", "导出条数", ORANGE, ORANGE_SOFT, 80, False),
+            ("accuracy", "准确率", ORANGE, ORANGE_SOFT, 72, False),
         ]:
-            stat = QFrame(self)
-            stat.setStyleSheet(
-                f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+            stat_card, value = self._make_stat_card(
+                caption=caption,
+                color=color,
+                bg_color=bg_color,
+                width=width,
+                initial_text="0%" if key == "accuracy" else "0",
+                clickable=clickable,
+                tooltip="点击打开解析输出目录" if clickable else "",
+                on_click=self.open_parse_output_dir if clickable else None,
             )
-            stat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            stat.setFixedWidth(width)
-            stat.setFixedHeight(48)
-            stat_layout = QVBoxLayout(stat)
-            stat_layout.setContentsMargins(8, 5, 8, 5)
-            stat_layout.setSpacing(1)
-            stat_layout.setAlignment(Qt.AlignCenter)
-            value = QLabel("0")
-            value.setAlignment(Qt.AlignCenter)
-            value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
-            label = CaptionLabel(caption)
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
-            stat_layout.addWidget(value)
-            stat_layout.addWidget(label)
+            if clickable and isinstance(stat_card, ClickableStatCard):
+                self._parse_success_stat_card = stat_card
             self.parse_stat_labels[key] = value
-            stats_row.addWidget(stat)
+            stats_row.addWidget(stat_card)
         status_and_stats.addLayout(stats_row, 0)
         task_inner.addLayout(status_and_stats)
-
-        output_stat = QFrame(self)
-        output_stat.setStyleSheet(
-            f"background: {ORANGE_SOFT}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
-        )
-        output_stat.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        output_layout = QVBoxLayout(output_stat)
-        output_layout.setContentsMargins(10, 6, 10, 6)
-        output_layout.setSpacing(2)
-        output_caption = CaptionLabel("输出文件")
-        output_caption.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
-        output_value = QLabel("-")
-        output_value.setWordWrap(True)
-        output_value.setMinimumWidth(0)
-        output_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        output_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        output_value.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {ORANGE};")
-        output_layout.addWidget(output_caption)
-        output_layout.addWidget(output_value)
-        self.parse_stat_labels["output"] = output_value
-        task_inner.addWidget(output_stat)
         task_card.viewLayout.addLayout(task_inner)
 
         log_card = self._card("解析日志")
@@ -1208,58 +1341,24 @@ class MainWindow(FluentWindow):
         stats_row = QHBoxLayout()
         stats_row.setSpacing(6)
         self.classic_stat_labels: dict[str, QLabel] = {}
-        for key, caption, color, bg_color, width in [
-            ("movies", "电影数", PRIMARY, PRIMARY_SOFT, 88),
-            ("lines", "台词数", GREEN, GREEN_SOFT, 88),
-            ("pages", "请求页数", ORANGE, ORANGE_SOFT, 88),
+        for key, caption, color, bg_color, width, clickable in [
+            ("movies", "电影数", PRIMARY, PRIMARY_SOFT, 88, True),
+            ("lines", "台词数", GREEN, GREEN_SOFT, 88, True),
+            ("pages", "请求页数", ORANGE, ORANGE_SOFT, 88, False),
         ]:
-            stat = QFrame(self)
-            stat.setStyleSheet(
-                f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+            stat_card, value = self._make_stat_card(
+                caption=caption,
+                color=color,
+                bg_color=bg_color,
+                width=width,
+                clickable=clickable,
+                tooltip="点击打开经典台词输出目录" if clickable else "",
+                on_click=self.open_classic_output_file if clickable else None,
             )
-            stat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            stat.setFixedWidth(width)
-            stat.setFixedHeight(48)
-            stat_layout = QVBoxLayout(stat)
-            stat_layout.setContentsMargins(8, 5, 8, 5)
-            stat_layout.setSpacing(1)
-            stat_layout.setAlignment(Qt.AlignCenter)
-            value = QLabel("0")
-            value.setAlignment(Qt.AlignCenter)
-            value.setWordWrap(True)
-            value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
-            label = CaptionLabel(caption)
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
-            stat_layout.addWidget(value)
-            stat_layout.addWidget(label)
             self.classic_stat_labels[key] = value
-            stats_row.addWidget(stat)
+            stats_row.addWidget(stat_card)
         status_and_stats.addLayout(stats_row, 0)
         stats_inner.addLayout(status_and_stats)
-
-        output_stat = QFrame(self)
-        output_stat.setStyleSheet(
-            f"background: {ORANGE_SOFT}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
-        )
-        output_stat.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        output_layout = QVBoxLayout(output_stat)
-        output_layout.setContentsMargins(8, 5, 8, 5)
-        output_layout.setSpacing(1)
-        output_value = QLabel("-")
-        output_value.setAlignment(Qt.AlignCenter)
-        output_value.setWordWrap(True)
-        output_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        output_value.setMinimumWidth(0)
-        output_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        output_value.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {ORANGE};")
-        output_layout.addWidget(output_value)
-        output_caption = CaptionLabel("输出文件")
-        output_caption.setAlignment(Qt.AlignCenter)
-        output_caption.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
-        output_layout.addWidget(output_caption)
-        self.classic_stat_labels["output"] = output_value
-        stats_inner.addWidget(output_stat)
         stats_card.viewLayout.addLayout(stats_inner)
 
         log_card = self._card("日志")
@@ -1372,62 +1471,23 @@ class MainWindow(FluentWindow):
         stats_row = QHBoxLayout()
         stats_row.setSpacing(6)
         self.automation_stat_labels: dict[str, QLabel] = {}
-        for key, caption, color, bg_color, width in [
-            ("total", "采集条数", GREEN, GREEN_SOFT, 88),
-            ("pages", "请求页数", PRIMARY, PRIMARY_SOFT, 88),
+        for key, caption, color, bg_color, width, clickable in [
+            ("total", "采集条数", GREEN, GREEN_SOFT, 88, True),
+            ("pages", "请求页数", PRIMARY, PRIMARY_SOFT, 88, False),
         ]:
-            stat = QFrame(self)
-            stat.setStyleSheet(
-                f"background: {bg_color}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
+            stat_card, value = self._make_stat_card(
+                caption=caption,
+                color=color,
+                bg_color=bg_color,
+                width=width,
+                clickable=clickable,
+                tooltip="点击打开今日台词输出目录" if clickable else "",
+                on_click=self.open_automation_output_file if clickable else None,
             )
-            stat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            stat.setFixedWidth(width)
-            stat.setFixedHeight(48)
-            stat_layout = QVBoxLayout(stat)
-            stat_layout.setContentsMargins(8, 5, 8, 5)
-            stat_layout.setSpacing(1)
-            stat_layout.setAlignment(Qt.AlignCenter)
-            value = QLabel("0")
-            value.setAlignment(Qt.AlignCenter)
-            value.setWordWrap(True)
-            value.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
-            label = CaptionLabel(caption)
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
-            stat_layout.addWidget(value)
-            stat_layout.addWidget(label)
             self.automation_stat_labels[key] = value
-            stats_row.addWidget(stat)
+            stats_row.addWidget(stat_card)
         status_and_stats.addLayout(stats_row, 0)
-
         stats_inner.addLayout(status_and_stats)
-
-        output_stat = QFrame(self)
-        output_stat.setStyleSheet(
-            f"background: {ORANGE_SOFT}; border: 1px solid {LINE_SOFT}; border-radius: 8px;"
-        )
-        output_stat.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        output_layout = QVBoxLayout(output_stat)
-        output_layout.setContentsMargins(8, 5, 8, 5)
-        output_layout.setSpacing(1)
-
-        output_value = QLabel("-")
-        output_value.setAlignment(Qt.AlignCenter)
-        output_value.setWordWrap(True)
-        output_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        output_value.setMinimumWidth(0)
-        output_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        output_value.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {ORANGE};")
-        output_layout.addWidget(output_value)
-
-        output_caption = CaptionLabel("输出文件")
-        output_caption.setAlignment(Qt.AlignCenter)
-        output_caption.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
-        output_layout.addWidget(output_caption)
-
-        self.automation_stat_labels["output"] = output_value
-        stats_inner.addWidget(output_stat)
-
         stats_card.viewLayout.addLayout(stats_inner)
 
         log_card = self._card("日志")
@@ -1718,15 +1778,21 @@ class MainWindow(FluentWindow):
             subhd_captcha_auto_submit_min_confidence=env_settings.subhd_captcha_auto_submit_min_confidence,
             subhd_search_timeout=env_settings.subhd_search_timeout,
             provider_search_timeout=env_settings.provider_search_timeout,
+            subhd_download_timeout=env_settings.subhd_download_timeout,
+            provider_download_timeout=env_settings.provider_download_timeout,
             proxies=env_settings.proxies(),
         )
         self.collect_log.clear()
         self.collect_progress_ring.setValue(0)
         self.collect_progress_label.setText("0%")
         self.collect_status.setText("任务启动中")
+        self._collect_download_dir = None
         for key in ("movies", "failed", "downloaded"):
             if key in self.collect_stat_labels:
                 self.collect_stat_labels[key].setText("0")
+        if "accuracy" in self.collect_stat_labels:
+            self.collect_stat_labels["accuracy"].setText("0%")
+        self._reset_collect_provider_hits()
         self.start_button.setEnabled(False)
         self.pause_button.setEnabled(True)
         self.pause_button.setText("暂停")
@@ -1861,16 +1927,74 @@ class MainWindow(FluentWindow):
         self.collect_progress_label.setText(f"{percent}%")
         self.collect_status.setText(f"{current}/{total} {movie}")
 
-    # 实时刷新电影/失败/下载计数卡片
+    # 实时刷新电影/失败/下载计数与准确率卡片
     def update_collect_stats(self, stats: dict) -> None:
+        movie_count = int(stats.get("movieCount", 0) or 0)
+        failed_count = int(stats.get("failedCount", 0) or 0)
+        download_count = int(stats.get("downloadCount", 0) or 0)
         mapping = {
-            "movies": stats.get("movieCount", 0),
-            "failed": stats.get("failedCount", 0),
-            "downloaded": stats.get("downloadCount", 0),
+            "movies": movie_count,
+            "failed": failed_count,
+            "downloaded": download_count,
         }
         for key, value in mapping.items():
             if key in self.collect_stat_labels:
                 self.collect_stat_labels[key].setText(str(value))
+        self._refresh_collect_accuracy(movie_count, download_count)
+        download_dir = str(stats.get("downloadDir") or "").strip()
+        if download_dir:
+            self._collect_download_dir = Path(download_dir)
+        provider_stats = stats.get("providerStats")
+        if isinstance(provider_stats, dict):
+            self._update_collect_provider_hits(provider_stats)
+
+    # 将各字幕源下载成功命中清零
+    def _reset_collect_provider_hits(self) -> None:
+        if not hasattr(self, "collect_provider_hit_labels"):
+            return
+        for provider_id, label in self.collect_provider_hit_labels.items():
+            display = {
+                "subhd": "SubHD",
+                "subdl": "SubDL",
+                "assrt": "ASSRT",
+                "opensubtitles": "OpenSubtitles",
+            }.get(provider_id, provider_id)
+            label.setText(f"{display} 成功采集0条")
+
+    # 按字幕源勾选状态显示/隐藏对应命中色块
+    def _sync_provider_hit_cards_visibility(self, *_args) -> None:
+        if not hasattr(self, "collect_provider_hit_cards"):
+            return
+        checks = getattr(self, "provider_checks", {})
+        for provider_id, card in self.collect_provider_hit_cards.items():
+            checkbox = checks.get(provider_id)
+            visible = checkbox.isChecked() if checkbox is not None else True
+            card.setVisible(visible)
+
+    # 按 providerStats.downloadCount 刷新各源命中文案
+    def _update_collect_provider_hits(self, provider_stats: dict) -> None:
+        if not hasattr(self, "collect_provider_hit_labels"):
+            return
+        display_names = {
+            "subhd": "SubHD",
+            "subdl": "SubDL",
+            "assrt": "ASSRT",
+            "opensubtitles": "OpenSubtitles",
+        }
+        for provider_id, label in self.collect_provider_hit_labels.items():
+            entry = provider_stats.get(provider_id) or {}
+            if not isinstance(entry, dict):
+                entry = {}
+            count = int(entry.get("downloadCount", 0) or 0)
+            display = display_names.get(provider_id, provider_id)
+            label.setText(f"{display} 成功采集{count}条")
+
+    # 按成功数/电影总数刷新准确率百分比
+    def _refresh_collect_accuracy(self, movie_count: int, download_count: int) -> None:
+        if "accuracy" not in self.collect_stat_labels:
+            return
+        accuracy = int(download_count / movie_count * 100) if movie_count else 0
+        self.collect_stat_labels["accuracy"].setText(f"{accuracy}%")
 
     def _pixmap_from_data_uri(self, data_uri: str) -> QPixmap:
         if not data_uri.startswith("data:image/") or "," not in data_uri:
@@ -2223,14 +2347,25 @@ class MainWindow(FluentWindow):
         InfoBar.error("采集失败", message, parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     def show_result_summary(self, result: dict) -> None:
-        # 电影卡保持过程中「已开始数」，结束时仅校准失败/下载
+        # 结束时校准电影总数 / 失败电影数 / 成功电影数 / 准确率
+        movie_count = int(result.get("movieCount", 0) or 0)
+        failed_count = int(result.get("failedCount", 0) or 0)
+        download_count = int(result.get("downloadCount", 0) or 0)
         stat_map = {
-            "failed": result.get("failedCount", 0),
-            "downloaded": result.get("downloadCount", 0),
+            "movies": movie_count,
+            "failed": failed_count,
+            "downloaded": download_count,
         }
         for key, value in stat_map.items():
             if key in self.collect_stat_labels:
                 self.collect_stat_labels[key].setText(str(value))
+        self._refresh_collect_accuracy(movie_count, download_count)
+        download_dir = str(result.get("downloadDir") or "").strip()
+        if download_dir:
+            self._collect_download_dir = Path(download_dir)
+        provider_stats = result.get("providerStats")
+        if isinstance(provider_stats, dict):
+            self._update_collect_provider_hits(provider_stats)
 
     # ── Automation Flow ───────────────────────────────────────────────
 
@@ -2253,8 +2388,6 @@ class MainWindow(FluentWindow):
         self.latest_automation_output_paths = []
         self.automation_stat_labels["total"].setText("0")
         self.automation_stat_labels["pages"].setText("0")
-        self.automation_stat_labels["output"].setText("-")
-        self.automation_stat_labels["output"].setToolTip("")
 
         self.automation_worker = AutomationScriptWorker(
             data_dir,
@@ -2321,11 +2454,6 @@ class MainWindow(FluentWindow):
         self.automation_open_button.setEnabled(any(path.exists() for path in self.latest_automation_output_paths))
         self.automation_stat_labels["total"].setText(str(result.get("totalCount", 0)))
         self.automation_stat_labels["pages"].setText(str(result.get("pageCount", 0)))
-        output_label = "\n".join(str(path) for path in self.latest_automation_output_paths) or "-"
-        self.automation_stat_labels["output"].setText(output_label)
-        self.automation_stat_labels["output"].setToolTip(
-            "\n".join(str(path) for path in self.latest_automation_output_paths)
-        )
         if result.get("skippedCount"):
             self.append_automation_log(f"本地去重：{result.get('skippedCount')} 条")
         if result.get("translationRequestedCount"):
@@ -2340,7 +2468,7 @@ class MainWindow(FluentWindow):
         toast_output = (
             f"{len(self.latest_automation_output_paths)} 个文件"
             if len(self.latest_automation_output_paths) > 1
-            else output_label
+            else ("\n".join(str(path) for path in self.latest_automation_output_paths) or "-")
         )
         InfoBar.success("自动化脚本完成", f"输出 {toast_output}", parent=self, position=InfoBarPosition.TOP, duration=5000)
 
@@ -2355,8 +2483,12 @@ class MainWindow(FluentWindow):
     def open_automation_output_file(self) -> None:
         if len(self.latest_automation_output_paths) > 1 and self.latest_automation_output_paths[0].parent:
             self.open_path(self.latest_automation_output_paths[0].parent)
-        elif self.latest_automation_output_path:
-            self.open_path(self.latest_automation_output_path)
+            return
+        if self.latest_automation_output_path and str(self.latest_automation_output_path) not in {".", ""}:
+            target = self.latest_automation_output_path
+            self.open_path(target if target.is_dir() else target.parent)
+            return
+        self.open_path(self._current_data_dir() / "automation")
 
     def reset_automation_panel(self) -> None:
         if self.automation_worker and self.automation_worker.isRunning():
@@ -2371,8 +2503,6 @@ class MainWindow(FluentWindow):
         self.automation_log.clear()
         self.automation_stat_labels["total"].setText("0")
         self.automation_stat_labels["pages"].setText("0")
-        self.automation_stat_labels["output"].setText("-")
-        self.automation_stat_labels["output"].setToolTip("")
 
 
 
@@ -2397,8 +2527,6 @@ class MainWindow(FluentWindow):
         self.latest_classic_output_paths = []
         for k in ["movies", "lines", "pages"]:
             self.classic_stat_labels[k].setText("0")
-        self.classic_stat_labels["output"].setText("-")
-        self.classic_stat_labels["output"].setToolTip("")
         self.classic_automation_worker = ClassicLinesAutomationWorker(
             data_dir,
             unicloud_import_format=self.classic_unicloud_switch.isChecked(),
@@ -2445,9 +2573,6 @@ class MainWindow(FluentWindow):
         self.classic_stat_labels["movies"].setText(str(result.get("totalMovies", 0)))
         self.classic_stat_labels["lines"].setText(str(result.get("totalLines", 0)))
         self.classic_stat_labels["pages"].setText(str(result.get("pageCount", 0)))
-        ol = "\n".join(str(p) for p in self.latest_classic_output_paths) or "-"
-        self.classic_stat_labels["output"].setText(ol)
-        self.classic_stat_labels["output"].setToolTip("\n".join(str(p) for p in self.latest_classic_output_paths))
         InfoBar.success("\u7ecf\u5178\u53f0\u8bcd\u91c7\u96c6\u5b8c\u6210", f"\u8f93\u51fa {len(self.latest_classic_output_paths)} \u4e2a\u6587\u4ef6", parent=self, duration=5000)
 
     def classic_automation_failed(self, message: str) -> None:
@@ -2461,8 +2586,12 @@ class MainWindow(FluentWindow):
     def open_classic_output_file(self) -> None:
         if len(self.latest_classic_output_paths) > 1 and self.latest_classic_output_paths[0].parent:
             self.open_path(self.latest_classic_output_paths[0].parent)
-        elif self.latest_classic_output_path:
-            self.open_path(self.latest_classic_output_path)
+            return
+        if self.latest_classic_output_path and str(self.latest_classic_output_path) not in {".", ""}:
+            target = self.latest_classic_output_path
+            self.open_path(target if target.is_dir() else target.parent)
+            return
+        self.open_path(self._current_data_dir() / "automation")
 
     def reset_classic_panel(self) -> None:
         if self.classic_automation_worker and self.classic_automation_worker.isRunning():
@@ -2477,8 +2606,6 @@ class MainWindow(FluentWindow):
         self.classic_log.clear()
         for k in ["movies", "lines", "pages"]:
             self.classic_stat_labels[k].setText("0")
-        self.classic_stat_labels["output"].setText("-")
-        self.classic_stat_labels["output"].setToolTip("")
 
     # ── Parser Flow ───────────────────────────────────────────────────
 
@@ -2576,6 +2703,7 @@ class MainWindow(FluentWindow):
                 )
         self.parse_button.setEnabled(False)
         output_dir = data_dir / "parsed"
+        self._parse_output_dir = output_dir
         env_settings = AppSettings.from_env(self.env_bootstrap.env_path)
         self.parser_worker = ParserWorker(
             validated_files,
@@ -2585,6 +2713,7 @@ class MainWindow(FluentWindow):
         )
         self.parser_worker.log_message.connect(self.parse_log.append)
         self.parser_worker.progress_changed.connect(self.update_parse_progress)
+        self.parser_worker.stats_changed.connect(self.update_parse_stats)
         self.parser_worker.finished_success.connect(self.parse_finished)
         self.parser_worker.finished_error.connect(self.parse_failed)
         self.parser_worker.start()
@@ -2593,7 +2722,7 @@ class MainWindow(FluentWindow):
         if not hasattr(self, "parse_stat_labels"):
             return
         for key, value in self.parse_stat_labels.items():
-            value.setText("-" if key == "output" else "0")
+            value.setText("0%" if key == "accuracy" else "0")
             value.setToolTip("")
         self.parse_progress_ring.setValue(0)
         self.parse_progress_label.setText("0%")
@@ -2607,25 +2736,44 @@ class MainWindow(FluentWindow):
         else:
             self.parse_status.setText(f"{current}/{total} 解析完成")
 
+    # 实时刷新解析成功/失败计数与准确率
+    def update_parse_stats(self, stats: dict) -> None:
+        total_count = int(stats.get("totalCount", 0) or 0)
+        success_count = int(stats.get("successCount", 0) or 0)
+        failure_count = int(stats.get("failureCount", 0) or 0)
+        if "total" in self.parse_stat_labels:
+            self.parse_stat_labels["total"].setText(str(total_count))
+        if "success" in self.parse_stat_labels:
+            self.parse_stat_labels["success"].setText(str(success_count))
+        if "failed" in self.parse_stat_labels:
+            self.parse_stat_labels["failed"].setText(str(failure_count))
+        self._refresh_parse_accuracy(total_count, success_count)
+
+    # 按成功数/字幕文件总数刷新解析准确率
+    def _refresh_parse_accuracy(self, total_count: int, success_count: int) -> None:
+        if "accuracy" not in self.parse_stat_labels:
+            return
+        accuracy = int(success_count / total_count * 100) if total_count else 0
+        self.parse_stat_labels["accuracy"].setText(f"{accuracy}%")
+
     def parse_finished(self, result: dict) -> None:
         self.parse_button.setEnabled(True)
         self.parse_progress_ring.setValue(100)
         self.parse_progress_label.setText("100%")
-        success_count = result.get("successCount", 0)
-        failure_count = result.get("failureCount", 0)
+        success_count = int(result.get("successCount", 0) or 0)
+        failure_count = int(result.get("failureCount", 0) or 0)
+        total_count = int(result.get("totalCount", 0) or 0)
         self.parse_status.setText(
             f"完成：成功 {success_count}，失败 {failure_count}"
         )
-        self.parse_stat_labels["total"].setText(str(result.get("totalCount", 0)))
+        self.parse_stat_labels["total"].setText(str(total_count))
         self.parse_stat_labels["success"].setText(str(success_count))
         self.parse_stat_labels["failed"].setText(str(failure_count))
         self.parse_stat_labels["exported"].setText(str(result.get("exportCount", 0)))
-        output_paths = [str(path) for path in (result.get("outputPaths") or []) if str(path or "").strip()]
-        self.parse_stat_labels["output"].setText("\n".join(output_paths) if output_paths else "-")
-        self.parse_stat_labels["output"].setToolTip("\n".join(output_paths))
+        self._refresh_parse_accuracy(total_count, success_count)
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.parse_log.append(
-            f"[{stamp}] 解析汇总：共 {result.get('totalCount', 0)} 个文件，"
+            f"[{stamp}] 解析汇总：共 {total_count} 个文件，"
             f"成功 {success_count}，"
             f"失败 {failure_count}，"
             f"导出字幕 {result.get('exportCount', 0)} 条"

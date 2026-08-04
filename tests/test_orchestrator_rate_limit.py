@@ -262,3 +262,56 @@ def test_app_settings_clamps_movie_concurrency(tmp_path: Path):
 
     env.write_text("SUBTITLE_MOVIE_CONCURRENCY=\n", encoding="utf-8")
     assert AppSettings.from_env(env).movie_concurrency == 2
+
+
+@pytest.mark.asyncio
+async def test_download_timeout_fails_fast(tmp_path: Path):
+    class SlowProvider(FakeProvider):
+        async def download(self, candidate: SubtitleCandidate, context: DownloadContext):
+            await asyncio.sleep(2.0)
+            return [DownloadedPayload(file_name="x.srt", content=_srt_bytes())]
+
+    provider = SlowProvider("assrt")
+    orch = SubtitleCollectionOrchestrator()
+    config = TaskConfig(
+        request_interval_ms=0,
+        provider_download_timeout=1,
+        subtitle_min_bilingual_ratio=0.0,
+        output_root=tmp_path,
+    )
+    paths = type("P", (), {"download_dir": tmp_path, "output_dir": tmp_path})()
+    failed: list = []
+    results: list = []
+    stats = {
+        "assrt": {
+            "downloadCount": 0,
+            "searchCount": 0,
+            "hitCount": 0,
+            "noMatchCount": 0,
+            "errorCount": 0,
+            "filteredCount": 0,
+            "lastError": "",
+            "lastErrorType": "",
+        }
+    }
+
+    # 缩短重试等待，避免测试过久
+    async def no_wait(_seconds: float):
+        return False
+
+    orch.control.interruptible_sleep = no_wait  # type: ignore[method-assign]
+    t0 = asyncio.get_running_loop().time()
+    error = await orch._download_best(
+        best=_candidate("assrt"),
+        providers=[provider],
+        config=config,
+        paths=paths,
+        stats=stats,
+        failed_records=failed,
+        download_results=results,
+    )
+    elapsed = asyncio.get_running_loop().time() - t0
+    assert error == ErrorType.DOWNLOAD_FAILED
+    assert results == []
+    assert elapsed < 5.0
+    assert any("超时" in (item.error or "") for item in failed)

@@ -178,7 +178,7 @@ async def test_abort_skips_remaining_movies(
 
 
 @pytest.mark.asyncio
-async def test_live_stats_increment_on_movie_start_and_download(
+async def test_live_stats_movie_total_and_success_fail_realtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     movies = [_movie("MovieA"), _movie("MovieB"), _movie("MovieC")]
@@ -190,25 +190,79 @@ async def test_live_stats_increment_on_movie_start_and_download(
     result = await orch.run(_config(tmp_path))
 
     assert result["runStatus"] == "completed"
+    assert result["movieCount"] == 3
     assert result["downloadCount"] == 3
+    assert result["failedCount"] == 0
+    # 建目录后立即推送 downloadDir（此时电影数仍为 0）
+    assert progress_payloads
+    assert progress_payloads[0].get("downloadDir")
+    assert int(progress_payloads[0]["movieCount"]) == 0
+    assert isinstance(progress_payloads[0].get("providerStats"), dict)
+    assert "assrt" in progress_payloads[0]["providerStats"]
+    assert int(progress_payloads[0]["providerStats"]["assrt"]["downloadCount"]) == 0
     movie_counts = [
         int(p["movieCount"])
         for p in progress_payloads
-        if "movieCount" in p
+        if "movieCount" in p and int(p["movieCount"]) > 0
     ]
-    download_counts = [
-        int(p["downloadCount"])
-        for p in progress_payloads
-        if "downloadCount" in p
-    ]
-    # 电影按「采集：」开始逐步 +1，不应一次跳到总数
+    # 拉表后电影卡固定为总数，不再按开始数递增
     assert movie_counts
-    assert movie_counts[0] == 1
-    assert max(movie_counts) == 3
-    assert sorted(set(movie_counts)) == [1, 2, 3]
-    assert download_counts
-    assert max(download_counts) == 3
-    assert 1 in download_counts
+    assert movie_counts[0] == 3
+    assert set(movie_counts) == {3}
+    assert all(p.get("downloadDir") for p in progress_payloads if "movieCount" in p)
+    assert all(isinstance(p.get("providerStats"), dict) for p in progress_payloads if "movieCount" in p)
+
+    # 每完成一部：成功或失败实时 +1，且成功+失败=已完成
+    completion_payloads = [
+        p for p in progress_payloads if p.get("current") is not None
+    ]
+    assert len(completion_payloads) == 3
+    for payload in completion_payloads:
+        current = int(payload["current"])
+        success = int(payload["downloadCount"])
+        failed = int(payload["failedCount"])
+        assert success + failed == current
+    assert int(completion_payloads[-1]["downloadCount"]) == 3
+    assert int(completion_payloads[-1]["failedCount"]) == 0
+    assert int(completion_payloads[-1]["providerStats"]["assrt"]["downloadCount"]) == 3
+    assert isinstance(result.get("providerStats"), dict)
+    assert int(result["providerStats"]["assrt"]["downloadCount"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_live_stats_movie_failure_counts_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    movies = [_movie("MovieA"), _movie("MovieB")]
+
+    class EmptySearchProvider(ControllableProvider):
+        async def search(self, movie: MovieInfo, log=None) -> list[SubtitleCandidate]:
+            self.search_titles.append(movie.title)
+            return []
+
+    provider = EmptySearchProvider()
+    _patch_orch(monkeypatch, movies, provider)
+    progress_payloads: list[dict] = []
+
+    orch = SubtitleCollectionOrchestrator(progress=progress_payloads.append)
+    result = await orch.run(_config(tmp_path, limit=2))
+
+    assert result["runStatus"] == "completed"
+    assert result["movieCount"] == 2
+    assert result["downloadCount"] == 0
+    assert result["failedCount"] == 2
+    # 明细事件可多于电影级失败数，但卡片口径是电影数
+    assert len(result["failedRecords"]) >= 2
+
+    completion_payloads = [
+        p for p in progress_payloads if p.get("current") is not None
+    ]
+    assert len(completion_payloads) == 2
+    for payload in completion_payloads:
+        assert int(payload["downloadCount"]) + int(payload["failedCount"]) == int(
+            payload["current"]
+        )
+    assert int(completion_payloads[-1]["failedCount"]) == 2
 
 
 @pytest.mark.asyncio

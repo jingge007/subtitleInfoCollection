@@ -493,8 +493,10 @@ async def test_download_retries_after_expired_temp_page(monkeypatch):
         result = await provider._download_via_api(client, "https://subhd.me", candidate, context)
 
     assert result is not None
-    assert api_calls == 1
+    # 首次 API 失效后会同域 re-prepare 再打一次 API，仍失效才走浏览器
+    assert api_calls == 2
     assert playwright_calls == 1
+    assert any("同域重新 prepare" in msg for msg in logs)
     assert any("浏览器页内下载" in msg for msg in logs)
 
 
@@ -559,7 +561,7 @@ async def test_download_via_playwright_api_page_fetch_success(monkeypatch):
     async def fake_open(base_url, subtitle_id, context=None):
         return FakePage()
 
-    async def fake_sync():
+    async def fake_sync(target=None):
         return None
 
     async def fake_post(base_url, subtitle_id, captcha_code, referer):

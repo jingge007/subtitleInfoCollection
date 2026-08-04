@@ -4,9 +4,22 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QPushButton, QScrollArea, QTableWidget, QTextBrowser, QTextEdit
-from qfluentwidgets import FluentWindow, SwitchButton
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QTableWidget,
+    QTextBrowser,
+    QTextEdit,
+    QWidget,
+)
+from qfluentwidgets import CaptionLabel, FluentWindow, HeaderCardWidget, SwitchButton
 
+from subtitle_info_collection.gui.config_editor import FullWidthIndicatorSegmentedWidget
 from subtitle_info_collection.gui.main_window import (
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
@@ -28,7 +41,7 @@ def test_main_window_uses_fluent_navigation_chrome(monkeypatch):
     assert window.height() == DEFAULT_WINDOW_HEIGHT
     assert isinstance(window, FluentWindow)
     assert window.navigationInterface is not None
-    assert window.stackedWidget.count() == 7
+    assert window.stackedWidget.count() == 9
     assert "QFrame#heroPanel" not in window.styleSheet()
     assert "QLabel#posterBlock" not in window.styleSheet()
 
@@ -55,6 +68,8 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
         "dashboardPage",
         "collectorPage",
         "parserPage",
+        "scriptCenterPage",
+        "classicLinesPage",
         "automationPage",
         "configPage",
         "historyPage",
@@ -82,9 +97,73 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
         "success",
         "failed",
         "exported",
-        "output",
+        "accuracy",
     }
-    assert window.parse_stat_labels["output"].wordWrap()
+    assert window.parse_stat_labels["accuracy"].text() == "0%"
+    assert window._parse_success_stat_card is not None
+    assert window._parse_success_stat_card.cursor().shape() == Qt.PointingHandCursor
+    assert window._parse_success_stat_card.toolTip() == "点击打开解析输出目录"
+    assert set(window.collect_stat_labels) == {
+        "movies",
+        "failed",
+        "downloaded",
+        "accuracy",
+    }
+    assert window.collect_stat_labels["accuracy"].text() == "0%"
+    assert set(window.collect_provider_hit_labels) == {
+        "subhd",
+        "subdl",
+        "assrt",
+        "opensubtitles",
+    }
+    assert window.collect_provider_hit_labels["subhd"].text() == "SubHD 成功采集0条"
+    for label in window.collect_provider_hit_labels.values():
+        parent = label.parentWidget()
+        assert isinstance(parent, QFrame)
+        assert parent.objectName() == "providerHitCard"
+        assert "background:" in parent.styleSheet()
+    assert set(window.collect_provider_hit_cards) == set(window.collect_provider_hit_labels)
+    # 取消勾选后对应色块隐藏，勾选后重新显示
+    window.subhd_check.setChecked(False)
+    assert window.collect_provider_hit_cards["subhd"].isHidden()
+    assert not window.collect_provider_hit_cards["subdl"].isHidden()
+    window.subhd_check.setChecked(True)
+    assert not window.collect_provider_hit_cards["subhd"].isHidden()
+    hits_panel = window.findChild(QWidget, "collectProviderHitsPanel")
+    assert hits_panel is not None
+    assert isinstance(hits_panel.layout(), QHBoxLayout)
+    # 命中色块在「任务状态」标题行右侧
+    collector_status = next(
+        (
+            card
+            for card in window.findChildren(HeaderCardWidget)
+            if card.title == "任务状态" and hits_panel.parentWidget() is card.headerView
+        ),
+        None,
+    )
+    assert collector_status is not None
+    assert hits_panel.parentWidget() is collector_status.headerView
+    assert hasattr(window, "config_precheck_layout")
+    assert window.config_precheck_layout.count() >= 8
+    tip = window.findChild(CaptionLabel, "configPrecheckTip")
+    assert tip is not None
+    assert "以下状态来自当前 .env" in tip.text()
+    # 说明在配置预检卡片标题行，而非内容区首项
+    precheck_headers = [
+        card
+        for card in window.findChildren(HeaderCardWidget)
+        if card.title == "配置预检"
+    ]
+    assert precheck_headers
+    assert tip.parentWidget() is precheck_headers[0].headerView
+    assert isinstance(window.config_editor.segment, FullWidthIndicatorSegmentedWidget)
+    assert not hasattr(window, "source_status_layout")
+    assert window._collect_success_stat_card is not None
+    assert window._collect_success_stat_card.cursor().shape() == Qt.PointingHandCursor
+    assert window._collect_success_stat_card.toolTip() == "点击打开采集输出目录"
+    assert set(window.automation_stat_labels) == {"total", "pages"}
+    assert set(window.classic_stat_labels) == {"movies", "lines", "pages"}
+    assert window.start_button.cursor().shape() == Qt.PointingHandCursor
     assert window.history_table.columnCount() == 5
     assert not hasattr(window, "latest_records_layout")
     assert all(
@@ -101,7 +180,7 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     app.quit()
 
 
-def test_automation_status_shows_full_output_paths(monkeypatch, tmp_path):
+def test_automation_clickable_stats_open_without_output_panel(monkeypatch, tmp_path):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     app = _app()
     window = MainWindow()
@@ -121,10 +200,47 @@ def test_automation_status_shows_full_output_paths(monkeypatch, tmp_path):
         }
     )
 
-    text = window.automation_stat_labels["output"].text()
-    assert str(first) in text
-    assert str(second) in text
-    assert "2 个文件" not in text
+    assert window.automation_stat_labels["total"].text() == "2"
+    assert window.automation_stat_labels["pages"].text() == "1"
+    assert "output" not in window.automation_stat_labels
+    assert window.latest_automation_output_paths == [first, second]
+
+    window.close()
+    app.quit()
+
+
+def test_parse_stats_accuracy_and_success_card(monkeypatch, tmp_path):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = _app()
+    window = MainWindow()
+
+    parse_dir = tmp_path / "parsed"
+    parse_dir.mkdir()
+    window._parse_output_dir = parse_dir
+    window.update_parse_stats(
+        {
+            "totalCount": 10,
+            "successCount": 8,
+            "failureCount": 2,
+        }
+    )
+    assert window.parse_stat_labels["total"].text() == "10"
+    assert window.parse_stat_labels["success"].text() == "8"
+    assert window.parse_stat_labels["failed"].text() == "2"
+    assert window.parse_stat_labels["accuracy"].text() == "80%"
+
+    window.parse_finished(
+        {
+            "totalCount": 10,
+            "successCount": 9,
+            "failureCount": 1,
+            "exportCount": 100,
+            "moviesPaths": [str(parse_dir / "movies.json")],
+            "subtitlesPaths": [str(parse_dir / "subtitles.json")],
+        }
+    )
+    assert window.parse_stat_labels["accuracy"].text() == "90%"
+    assert window.parse_stat_labels["exported"].text() == "100"
 
     window.close()
     app.quit()
@@ -265,3 +381,40 @@ def test_package_dist_dir_env_setting_is_documented_and_used():
     assert "CONF['distpath']" in package_spec
     assert all("ms-playwright" in content for content in spec_files.values())
     assert all(".local-browsers" in content for content in spec_files.values())
+
+
+def test_collect_stats_accuracy_and_download_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = _app()
+    window = MainWindow()
+
+    download_dir = tmp_path / "output" / "run-1"
+    download_dir.mkdir(parents=True)
+
+    window.update_collect_stats(
+        {
+            "movieCount": 30,
+            "failedCount": 3,
+            "downloadCount": 16,
+            "downloadDir": str(download_dir),
+        }
+    )
+
+    assert window.collect_stat_labels["movies"].text() == "30"
+    assert window.collect_stat_labels["failed"].text() == "3"
+    assert window.collect_stat_labels["downloaded"].text() == "16"
+    assert window.collect_stat_labels["accuracy"].text() == "53%"
+    assert window._collect_download_dir == download_dir
+
+    window.show_result_summary(
+        {
+            "movieCount": 30,
+            "failedCount": 4,
+            "downloadCount": 26,
+            "downloadDir": str(download_dir),
+        }
+    )
+    assert window.collect_stat_labels["accuracy"].text() == "86%"
+
+    window.close()
+    app.quit()

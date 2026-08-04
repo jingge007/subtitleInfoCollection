@@ -241,7 +241,7 @@ class SubtitleCollectionOrchestrator:
         # 按字幕源分桶的上次请求时间（search / API download 共用）
         self._last_provider_request_at: dict[str, float] = {}
 
-    # 向 GUI 推送电影/失败/下载实时计数（可附带进度环字段）
+    # 向 GUI 推送电影/失败/下载实时计数（可附带进度环字段、输出目录与各源命中）
     def _emit_live_stats(
         self,
         *,
@@ -251,12 +251,21 @@ class SubtitleCollectionOrchestrator:
         current: int | None = None,
         total: int | None = None,
         current_movie: str = "",
+        download_dir: str | None = None,
+        provider_stats: dict[str, dict[str, object]] | None = None,
     ) -> None:
         payload: dict[str, object] = {
             "movieCount": movie_count,
             "failedCount": failed_count,
             "downloadCount": download_count,
         }
+        if download_dir:
+            payload["downloadDir"] = download_dir
+        if provider_stats is not None:
+            # 快照拷贝，避免后续原地累加污染已推送的 progress 载荷
+            payload["providerStats"] = {
+                provider_id: dict(stats) for provider_id, stats in provider_stats.items()
+            }
         if current is not None:
             payload["current"] = current
             payload["total"] = total if total is not None else 0
@@ -270,11 +279,20 @@ class SubtitleCollectionOrchestrator:
         paths = get_run_paths(output_root, config.year, config.limit, started_at)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
         paths.download_dir.mkdir(parents=True, exist_ok=True)
+        download_dir_str = str(paths.download_dir)
         run_id = self.storage.create_task_run(config.year, config.limit) if self.storage else 0
 
         registry = create_provider_registry(config)
         providers = select_providers(config, registry)
         provider_stats = create_provider_stats(providers)
+        # 建目录后立刻告知 GUI 输出路径与各源命中初值，便于成功数卡片点击打开
+        self._emit_live_stats(
+            movie_count=0,
+            failed_count=0,
+            download_count=0,
+            download_dir=download_dir_str,
+            provider_stats=provider_stats,
+        )
         failed_records: list[FailedRecord] = []
         all_candidates: list[SubtitleCandidate] = []
         best_candidates: list[SubtitleCandidate] = []
@@ -292,21 +310,25 @@ class SubtitleCollectionOrchestrator:
         movie_sem = asyncio.Semaphore(movie_concurrency)
         provider_sems = {provider.id: asyncio.Semaphore(1) for provider in active_providers}
         completed_count = 0
-        started_movie_count = 0
+        movie_success_count = 0
+        movie_failed_count = 0
+        movies: list[MovieInfo] = []
 
-        # 在持有 state_lock 时调用，推送当前实时计数快照
+        # 在持有 state_lock 时推送：电影=总数，成功/失败=电影级实时计数，附带各源下载命中
         def emit_stats_locked(
             *,
             current: int | None = None,
             current_movie: str = "",
         ) -> None:
             self._emit_live_stats(
-                movie_count=started_movie_count,
-                failed_count=len(failed_records),
-                download_count=len(download_results),
+                movie_count=len(movies),
+                failed_count=movie_failed_count,
+                download_count=movie_success_count,
                 current=current,
                 total=len(movies) if current is not None else None,
                 current_movie=current_movie,
+                download_dir=download_dir_str,
+                provider_stats=provider_stats,
             )
 
         try:
@@ -319,6 +341,8 @@ class SubtitleCollectionOrchestrator:
             for movie in movies:
                 self.storage and self.storage.save_movie(movie)
             self.log(f"[{datetime.now().strftime('%H:%M:%S')}] 电影列表数量：{len(movies)}")
+            # 拉表后立即固定显示电影总数，成功/失败从 0 起实时累加
+            emit_stats_locked()
 
             if not active_providers:
                 failed_records.append(
@@ -330,15 +354,11 @@ class SubtitleCollectionOrchestrator:
                         error="没有启用的字幕源",
                     )
                 )
-                self._emit_live_stats(
-                    movie_count=started_movie_count,
-                    failed_count=len(failed_records),
-                    download_count=len(download_results),
-                )
+                emit_stats_locked()
 
             # 处理单部电影（受电影并发与每源互斥约束）
             async def process_movie(movie: MovieInfo) -> None:
-                nonlocal completed_count, started_movie_count
+                nonlocal completed_count, movie_success_count, movie_failed_count
                 # 拿并发名额前检查暂停/中止，避免暂停时占满 semaphore
                 if await self.control.wait_if_paused_or_aborted():
                     return
@@ -349,23 +369,21 @@ class SubtitleCollectionOrchestrator:
                     self.log(
                         f"[{datetime.now().strftime('%H:%M:%S')}] 采集：{movie_name}"
                     )
-                    async with state_lock:
-                        started_movie_count += 1
-                        emit_stats_locked()
                     movie_download_ok = False
                     any_candidate_found = False
 
                     for provider in active_providers:
-                        async with provider_sems[provider.id]:
-                            async with state_lock:
-                                blocked = provider.id in download_blocked_providers
-                            if blocked:
-                                self.log(
-                                    f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                    f"跳过 {provider.id}（下载额度已受限），尝试下一个字幕源"
-                                )
-                                continue
+                        async with state_lock:
+                            blocked = provider.id in download_blocked_providers
+                        if blocked:
+                            self.log(
+                                f"[{datetime.now().strftime('%H:%M:%S')}] "
+                                f"跳过 {provider.id}（下载额度已受限），尝试下一个字幕源"
+                            )
+                            continue
 
+                        # search 与 download 分段持锁，避免长下载独占导致其他电影无法搜索
+                        async with provider_sems[provider.id]:
                             candidates = await self._collect_movie_candidates(
                                 movie=movie,
                                 providers=[provider],
@@ -373,38 +391,39 @@ class SubtitleCollectionOrchestrator:
                                 stats=provider_stats,
                                 failed_records=failed_records,
                                 state_lock=state_lock,
-                                on_stats=emit_stats_locked,
+                                on_stats=None,
                             )
-                            if not candidates:
-                                continue
+                        if not candidates:
+                            continue
 
-                            any_candidate_found = True
-                            sorted_candidates = sort_candidates(candidates)
-                            best = sorted_candidates[0]
-                            async with state_lock:
-                                best_candidates.append(best)
-                                all_candidates.extend(sorted_candidates)
-                                if self.storage:
-                                    for item in sorted_candidates:
-                                        self.storage.save_candidate(item)
-                            self.log(
-                                f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 命中 "
-                                f"{len(sorted_candidates)} 条，推荐：{best.provider}/{best.subtitle_title}"
-                            )
+                        any_candidate_found = True
+                        sorted_candidates = sort_candidates(candidates)
+                        best = sorted_candidates[0]
+                        async with state_lock:
+                            best_candidates.append(best)
+                            all_candidates.extend(sorted_candidates)
+                            if self.storage:
+                                for item in sorted_candidates:
+                                    self.storage.save_candidate(item)
+                        self.log(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id} 命中 "
+                            f"{len(sorted_candidates)} 条，推荐：{best.provider}/{best.subtitle_title}"
+                        )
 
-                            max_download_attempts = 3
-                            attempted_downloads = 0
-                            for candidate_to_download in sorted_candidates:
-                                if attempted_downloads >= max_download_attempts:
-                                    break
-                                attempted_downloads += 1
-                                if attempted_downloads > 1:
-                                    self.log(
-                                        f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                        f"尝试第 {attempted_downloads} 个候选："
-                                        f"{candidate_to_download.provider}/"
-                                        f"{candidate_to_download.subtitle_title}"
-                                    )
+                        max_download_attempts = 3
+                        attempted_downloads = 0
+                        for candidate_to_download in sorted_candidates:
+                            if attempted_downloads >= max_download_attempts:
+                                break
+                            attempted_downloads += 1
+                            if attempted_downloads > 1:
+                                self.log(
+                                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                                    f"尝试第 {attempted_downloads} 个候选："
+                                    f"{candidate_to_download.provider}/"
+                                    f"{candidate_to_download.subtitle_title}"
+                                )
+                            async with provider_sems[provider.id]:
                                 error_type = await self._download_best(
                                     best=candidate_to_download,
                                     providers=active_providers,
@@ -414,59 +433,73 @@ class SubtitleCollectionOrchestrator:
                                     failed_records=failed_records,
                                     download_results=download_results,
                                     state_lock=state_lock,
-                                    on_stats=emit_stats_locked,
+                                    on_stats=None,
                                 )
-                                if error_type == ErrorType.DOWNLOAD_QUOTA_EXCEEDED:
-                                    async with state_lock:
-                                        download_blocked_providers.add(candidate_to_download.provider)
-                                    self.log(
-                                        f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                        f"{candidate_to_download.provider} 下载额度受限，"
-                                        f"本轮后续下载跳过该来源"
-                                    )
-                                    break
+                            if error_type == ErrorType.DOWNLOAD_QUOTA_EXCEEDED:
                                 async with state_lock:
-                                    downloaded_ok = any(
-                                        r.provider_subtitle_id
-                                        == candidate_to_download.provider_subtitle_id
-                                        for r in download_results
-                                    )
-                                if downloaded_ok:
-                                    movie_download_ok = True
-                                    break
+                                    download_blocked_providers.add(candidate_to_download.provider)
                                 self.log(
                                     f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                    f"候选 {attempted_downloads} 下载失败，尝试下一个候选"
+                                    f"{candidate_to_download.provider} 下载额度受限，"
+                                    f"本轮后续下载跳过该来源"
                                 )
-
-                            if movie_download_ok:
+                                break
+                            async with state_lock:
+                                downloaded_ok = any(
+                                    r.provider_subtitle_id
+                                    == candidate_to_download.provider_subtitle_id
+                                    for r in download_results
+                                )
+                            if downloaded_ok:
+                                movie_download_ok = True
                                 break
                             self.log(
                                 f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                f"{provider.id} 候选下载均失败，尝试下一个字幕源"
+                                f"候选 {attempted_downloads} 下载失败，尝试下一个候选"
                             )
 
-                    if not any_candidate_found:
-                        async with state_lock:
-                            failed_records.append(
-                                FailedRecord(
-                                    movie=movie,
-                                    movie_name=movie_name,
-                                    provider=",".join(p.id for p in active_providers),
-                                    error_type=ErrorType.NO_MATCH,
-                                    error="没有找到符合要求的双语 ass/srt 字幕候选",
-                                )
-                            )
-                            emit_stats_locked()
-                    elif not movie_download_ok:
+                        if movie_download_ok:
+                            break
                         self.log(
-                            f"[{datetime.now().strftime('%H:%M:%S')}] 所有字幕源下载失败：{movie_name}"
+                            f"[{datetime.now().strftime('%H:%M:%S')}] "
+                            f"{provider.id} 候选下载均失败，尝试下一个字幕源"
                         )
 
+                    # 电影处理结束：成功/失败二选一实时 +1，保证成功+失败=已完成
                     async with state_lock:
+                        if movie_download_ok:
+                            movie_success_count += 1
+                        else:
+                            movie_failed_count += 1
+                            if not any_candidate_found:
+                                failed_records.append(
+                                    FailedRecord(
+                                        movie=movie,
+                                        movie_name=movie_name,
+                                        provider=",".join(p.id for p in active_providers),
+                                        error_type=ErrorType.NO_MATCH,
+                                        error="没有找到符合要求的双语 ass/srt 字幕候选",
+                                    )
+                                )
+                            else:
+                                self.log(
+                                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                                    f"所有字幕源下载失败：{movie_name}"
+                                )
+                                failed_records.append(
+                                    FailedRecord(
+                                        movie=movie,
+                                        movie_name=movie_name,
+                                        provider=",".join(p.id for p in active_providers),
+                                        error_type=ErrorType.DOWNLOAD_FAILED,
+                                        error="所有字幕源下载失败",
+                                    )
+                                )
                         completed_count += 1
-                        current = completed_count
-                        emit_stats_locked(current=current, current_movie=movie_name)
+                        emit_stats_locked(
+                            current=completed_count,
+                            current_movie=movie_name,
+                        )
 
             if movies and active_providers:
                 await asyncio.gather(*(process_movie(movie) for movie in movies))
@@ -484,6 +517,8 @@ class SubtitleCollectionOrchestrator:
                 source_health=source_health,
                 provider_stats=provider_stats,
                 run_status=run_status,
+                movie_success_count=movie_success_count,
+                movie_failed_count=movie_failed_count,
             )
             self.storage and self.storage.finish_task_run(run_id, run_status, result)
             if run_status == "aborted":
@@ -743,21 +778,41 @@ class SubtitleCollectionOrchestrator:
             return ErrorType.PROVIDER_DISABLED
 
         max_retries = 2
+        download_timeout = (
+            config.subhd_download_timeout
+            if best.provider == "subhd"
+            else config.provider_download_timeout
+        )
         for retry in range(max_retries + 1):
             try:
                 # API 源每次 download（含重试）前走分桶；SubHD 不分桶
                 if best.provider in _DOWNLOAD_RATE_LIMITED_PROVIDERS:
                     await self._respect_rate_limit(best.provider, config.request_interval_ms)
-                payloads = await provider.download(
-                    best,
-                    DownloadContext(
-                        request_interval_ms=config.request_interval_ms,
-                        request_verification=self.request_verification,
-                        log=self.log,
-                        captcha_ocr_enabled=config.subhd_captcha_ocr_enabled,
-                        captcha_auto_submit_min_confidence=config.subhd_captcha_auto_submit_min_confidence,
-                    ),
-                )
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + max(1, download_timeout)
+                try:
+                    payloads = await asyncio.wait_for(
+                        provider.download(
+                            best,
+                            DownloadContext(
+                                request_interval_ms=config.request_interval_ms,
+                                request_verification=self.request_verification,
+                                log=self.log,
+                                captcha_ocr_enabled=config.subhd_captcha_ocr_enabled,
+                                captcha_auto_submit_min_confidence=(
+                                    config.subhd_captcha_auto_submit_min_confidence
+                                ),
+                                deadline_monotonic=deadline,
+                            ),
+                        ),
+                        timeout=max(1, download_timeout),
+                    )
+                except TimeoutError as exc:
+                    raise CollectorError(
+                        f"下载超时（{download_timeout}秒）",
+                        ErrorType.DOWNLOAD_FAILED,
+                        best.provider,
+                    ) from exc
                 base_name = safe_filename(
                     best.movie_title_zh or best.movie_title or best.provider_subtitle_id
                 )
@@ -800,7 +855,9 @@ class SubtitleCollectionOrchestrator:
                         f"[{datetime.now().strftime('%H:%M:%S')}] 下载失败（{exc.error_type}），"
                         f"{wait_seconds}秒后重试 ({retry + 1}/{max_retries})"
                     )
-                    await asyncio.sleep(wait_seconds)
+                    await self.control.interruptible_sleep(wait_seconds)
+                    if self.control.is_aborted():
+                        return ErrorType.DOWNLOAD_FAILED
                     continue
                 async with lock:
                     failed_records.append(
@@ -833,7 +890,9 @@ class SubtitleCollectionOrchestrator:
                         f"[{datetime.now().strftime('%H:%M:%S')}] 下载异常（{error_type}），"
                         f"{wait_seconds}秒后重试 ({retry + 1}/{max_retries})"
                     )
-                    await asyncio.sleep(wait_seconds)
+                    await self.control.interruptible_sleep(wait_seconds)
+                    if self.control.is_aborted():
+                        return error_type
                     continue
                 async with lock:
                     failed_records.append(
@@ -869,6 +928,8 @@ class SubtitleCollectionOrchestrator:
         source_health: dict[str, dict[str, object]],
         provider_stats: dict[str, dict[str, object]],
         run_status: str = "completed",
+        movie_success_count: int | None = None,
+        movie_failed_count: int | None = None,
     ) -> dict[str, object]:
         downloadable = []
         for result_index, result in enumerate(download_results, start=1):
@@ -886,6 +947,14 @@ class SubtitleCollectionOrchestrator:
                     }
                 )
 
+        # 成功/失败以电影级计数为准；未显式传入时回退到结果列表长度
+        success_count = (
+            movie_success_count if movie_success_count is not None else len(download_results)
+        )
+        fail_count = (
+            movie_failed_count if movie_failed_count is not None else len(failed_records)
+        )
+
         return {
             "year": config.year,
             "limit": config.limit,
@@ -900,8 +969,8 @@ class SubtitleCollectionOrchestrator:
             "movieCount": len(movies),
             "subtitleCount": len(all_candidates),
             "bestCount": len(best_candidates),
-            "failedCount": len(failed_records),
-            "downloadCount": len(download_results),
+            "failedCount": fail_count,
+            "downloadCount": success_count,
             "downloadDir": str(paths.download_dir),
             "sourceHealth": source_health,
             "providerStats": provider_stats,

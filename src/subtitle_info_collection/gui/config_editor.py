@@ -3,13 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QEvent, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QGuiApplication, QPainter
 from PySide6.QtWidgets import (
     QFileDialog,
-    QGridLayout,
     QHBoxLayout,
-    QLabel,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -18,7 +16,6 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
-    CardWidget,
     DoubleSpinBox,
     HeaderCardWidget,
     InfoBar,
@@ -35,6 +32,8 @@ from qfluentwidgets import (
     TransparentToolButton,
     FluentIcon as FIF,
 )
+from qfluentwidgets.common.color import autoFallbackThemeColor
+from qfluentwidgets.common.style_sheet import isDarkTheme
 
 from ..config import (
     CONFIG_GROUP_LABELS,
@@ -45,7 +44,6 @@ from ..config import (
     CONFIG_GROUP_SUBHD,
     ENV_FIELD_META,
     AppSettings,
-    ConfigCheckResult,
     EnvFieldMeta,
     DEFAULT_PROVIDER_PRIORITY,
     parse_bool,
@@ -56,12 +54,7 @@ from ..config import (
     parse_ratio,
 )
 from .styles import (
-    GREEN,
-    GREEN_SOFT,
-    ORANGE,
-    ORANGE_SOFT,
     PRIMARY,
-    PRIMARY_SOFT,
     TEXT,
     TEXT_PLACEHOLDER,
     TEXT_SOFT,
@@ -70,7 +63,6 @@ from .styles import (
 PAGE_SPACING = 8
 
 GROUP_TITLES = {
-    "overview": "概览",
     **CONFIG_GROUP_LABELS,
 }
 
@@ -143,6 +135,44 @@ class NoWheelDoubleSpinBox(DoubleSpinBox):
         event.ignore()
 
 
+class FullWidthIndicatorSegmentedWidget(SegmentedWidget):
+    """分段导航：选中指示条拉满当前 Tab 宽度"""
+
+    # 绘制选中背景与与 Tab 同宽的底部指示条
+    def paintEvent(self, e) -> None:  # noqa: N802
+        QWidget.paintEvent(self, e)
+
+        if not self.currentItem():
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHints(QPainter.Antialiasing)
+
+        if isDarkTheme():
+            painter.setPen(QColor(255, 255, 255, 14))
+            painter.setBrush(QColor(255, 255, 255, 15))
+        else:
+            painter.setPen(QColor(0, 0, 0, 19))
+            painter.setBrush(QColor(255, 255, 255, 179))
+
+        item = self.currentItem()
+        slide_x = int(self.slideAni.value())
+        rect = item.rect().adjusted(1, 1, -1, -1).translated(slide_x, 0)
+        painter.drawRoundedRect(rect, 5, 5)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(
+            autoFallbackThemeColor(self.lightIndicatorColor, self.darkIndicatorColor)
+        )
+        # 左右各留 4px，指示条与 Tab 视觉同宽
+        indicator_width = max(item.width() - 8, 8)
+        painter.drawRoundedRect(
+            QRectF(slide_x + 4, self.height() - 3.5, indicator_width, 3),
+            1.5,
+            1.5,
+        )
+
+
 class ConfigEditorWidget(QWidget):
     """配置项编辑器：从 .env 对齐展示，保存时回写键值"""
 
@@ -187,17 +217,11 @@ class ConfigEditorWidget(QWidget):
         header.addWidget(self.save_button)
         root.addLayout(header)
 
-        self.segment = SegmentedWidget(self)
+        self.segment = FullWidthIndicatorSegmentedWidget(self)
         self.stack = QStackedWidget(self)
         self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
-        self.config_cards_layout = QGridLayout()
-        self.config_cards_layout.setSpacing(PAGE_SPACING)
-        overview_page = self._build_overview_page()
-        self._group_pages: dict[str, QWidget] = {"overview": overview_page}
-        self.stack.addWidget(overview_page)
-        self.segment.addItem(routeKey="overview", text=GROUP_TITLES["overview"])
-
+        self._group_pages: dict[str, QWidget] = {}
         for group in [
             CONFIG_GROUP_SECRETS,
             CONFIG_GROUP_STRATEGY,
@@ -210,26 +234,10 @@ class ConfigEditorWidget(QWidget):
             self.stack.addWidget(page)
             self.segment.addItem(routeKey=group, text=GROUP_TITLES[group])
 
-        self.segment.setCurrentItem("overview")
+        self.segment.setCurrentItem(CONFIG_GROUP_SECRETS)
         self.segment.currentItemChanged.connect(self._on_group_changed)
         root.addWidget(self.segment)
         root.addWidget(self.stack, 1)
-
-    # 概览页：预检徽章容器
-    def _build_overview_page(self) -> QWidget:
-        page = QWidget(self)
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 8, 0, 0)
-        layout.setSpacing(PAGE_SPACING)
-        tip = CaptionLabel("以下状态来自当前 .env；保存配置后会自动刷新。进行中的任务不会热替换配置。")
-        tip.setStyleSheet(f"color: {TEXT_SOFT};")
-        tip.setWordWrap(True)
-        layout.addWidget(tip)
-        card = self._card("配置预检")
-        card.viewLayout.addLayout(self.config_cards_layout)
-        layout.addWidget(card)
-        layout.addStretch(1)
-        return page
 
     # 按分组生成可编辑表单
     def _build_group_page(self, group: str) -> QWidget:
@@ -438,109 +446,3 @@ class ConfigEditorWidget(QWidget):
         if data_dir:
             values["SUBTITLE_COLLECTION_DATA_DIR"] = str(Path(data_dir).expanduser())
         return values
-
-    # 刷新概览预检卡片
-    def refresh_overview(self, config_check: ConfigCheckResult) -> None:
-        while self.config_cards_layout.count():
-            item = self.config_cards_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        cards = [
-            self._status_card(
-                "就绪状态",
-                "就绪" if config_check.ready else "待完善",
-                "采集前请确保 TMDb 与至少一个字幕源已配置",
-                config_check.ready,
-            ),
-            self._status_card(
-                "TMDb",
-                "已配置" if config_check.tmdb_configured else "未配置",
-                "TMDB_TOKEN",
-                config_check.tmdb_configured,
-            ),
-            self._status_card(
-                "字幕源",
-                f"{config_check.configured_provider_count}/{config_check.enabled_provider_count}",
-                "已配置 / 已启用",
-                config_check.configured_provider_count > 0,
-            ),
-            self._status_card(
-                ".env",
-                "存在" if config_check.env_exists else "缺失",
-                str(config_check.env_path),
-                config_check.env_exists,
-            ),
-            self._status_card(
-                "请求间隔",
-                f"{config_check.request_interval_ms} ms",
-                "SUBTITLE_REQUEST_INTERVAL_MS",
-                None,
-            ),
-            self._status_card(
-                "电影并发",
-                f"{config_check.movie_concurrency}",
-                "SUBTITLE_MOVIE_CONCURRENCY（1～4）",
-                None,
-            ),
-            self._status_card(
-                "代理",
-                "已启用" if config_check.proxies_configured else "未启用",
-                "HTTP_PROXY / HTTPS_PROXY",
-                None,
-            ),
-            self._status_card(
-                "数据目录",
-                "存在" if config_check.data_dir_exists else "将创建",
-                str(config_check.data_dir),
-                config_check.data_dir_exists if config_check.data_dir_exists else None,
-            ),
-        ]
-        for index, card in enumerate(cards):
-            self.config_cards_layout.addWidget(card, index // 3, index % 3)
-
-    def _status_card(
-        self, title: str, value: str, detail: str, ok: bool | None = True
-    ) -> CardWidget:
-        card = CardWidget(self)
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        card.setMinimumHeight(72)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(4)
-        title_label = CaptionLabel(title)
-        title_label.setStyleSheet(f"color: {TEXT_SOFT};")
-        value_label = StrongBodyLabel(value)
-        if ok is True:
-            value_label.setStyleSheet(f"color: {GREEN}; font-size: 15px;")
-        elif ok is False:
-            value_label.setStyleSheet(f"color: {ORANGE}; font-size: 15px;")
-        else:
-            value_label.setStyleSheet(f"color: {PRIMARY}; font-size: 15px;")
-        detail_label = CaptionLabel(detail)
-        detail_label.setWordWrap(True)
-        detail_label.setStyleSheet(f"color: {TEXT_PLACEHOLDER};")
-        layout.addWidget(title_label)
-        layout.addWidget(value_label)
-        layout.addWidget(detail_label)
-        return card
-
-    def _status_badge(self, text: str, ok: bool | None = True) -> QLabel:
-        badge = QLabel(text)
-        if ok is True:
-            badge.setStyleSheet(
-                f"background: {GREEN_SOFT}; color: {GREEN}; border-radius: 8px; "
-                f"padding: 3px 10px; font-size: 12px; font-weight: 700;"
-            )
-        elif ok is False:
-            badge.setStyleSheet(
-                f"background: {ORANGE_SOFT}; color: {ORANGE}; border-radius: 8px; "
-                f"padding: 3px 10px; font-size: 12px; font-weight: 700;"
-            )
-        else:
-            badge.setStyleSheet(
-                f"background: {PRIMARY_SOFT}; color: {PRIMARY}; border-radius: 8px; "
-                f"padding: 3px 10px; font-size: 12px; font-weight: 700;"
-            )
-        return badge

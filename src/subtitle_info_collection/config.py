@@ -18,8 +18,12 @@ DEFAULT_MOVIE_CONCURRENCY = 2
 DEFAULT_MIN_BILINGUAL_RATIO = 0.70
 DEFAULT_SUBHD_SEARCH_TIMEOUT = 120
 DEFAULT_PROVIDER_SEARCH_TIMEOUT = 90
+DEFAULT_SUBHD_DOWNLOAD_TIMEOUT = 180
+DEFAULT_PROVIDER_DOWNLOAD_TIMEOUT = 60
 # ASSRT 适配器内部短间隔：长间隔由编排器按源分桶负责
 ASSRT_INTERNAL_INTERVAL_MS = 500
+# 请求间隔安全下限（毫秒）
+MIN_REQUEST_INTERVAL_MS = 8_000
 PROVIDER_LABELS = {
     "subhd": "SubHD",
     "subdl": "SubDL",
@@ -250,7 +254,7 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
     ),
     EnvFieldMeta(
         "SUBTITLE_REQUEST_INTERVAL_MS", "请求间隔 (ms)", CONFIG_GROUP_STRATEGY, "int",
-        "降低限流风险；程序会将过低值抬升到不低于 12000。", "request_interval_ms",
+        "降低限流风险；程序会将过低值抬升到不低于 8000。", "request_interval_ms",
     ),
     EnvFieldMeta(
         "SUBTITLE_MOVIE_CONCURRENCY", "电影并发数", CONFIG_GROUP_STRATEGY, "int",
@@ -267,6 +271,14 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
     EnvFieldMeta(
         "PROVIDER_SEARCH_TIMEOUT", "其他源搜索超时 (秒)", CONFIG_GROUP_STRATEGY, "int",
         "SubDL / ASSRT / OpenSubtitles；留空默认 90。", "provider_search_timeout",
+    ),
+    EnvFieldMeta(
+        "SUBHD_DOWNLOAD_TIMEOUT", "SubHD 下载超时 (秒)", CONFIG_GROUP_STRATEGY, "int",
+        "单次 SubHD 下载硬超时；留空默认 180。", "subhd_download_timeout",
+    ),
+    EnvFieldMeta(
+        "PROVIDER_DOWNLOAD_TIMEOUT", "其他源下载超时 (秒)", CONFIG_GROUP_STRATEGY, "int",
+        "SubDL / ASSRT / OpenSubtitles 单次下载硬超时；留空默认 60。", "provider_download_timeout",
     ),
     EnvFieldMeta(
         "SUBHD_CAPTCHA_OCR_ENABLED", "验证码 OCR", CONFIG_GROUP_SUBHD, "bool",
@@ -501,6 +513,8 @@ class AppSettings:
     captcha_sound_enabled: bool = True
     subhd_search_timeout: int = DEFAULT_SUBHD_SEARCH_TIMEOUT
     provider_search_timeout: int = DEFAULT_PROVIDER_SEARCH_TIMEOUT
+    subhd_download_timeout: int = DEFAULT_SUBHD_DOWNLOAD_TIMEOUT
+    provider_download_timeout: int = DEFAULT_PROVIDER_DOWNLOAD_TIMEOUT
     data_dir: Path = field(default_factory=default_data_dir)
     package_dist_dir: str = ""
     tmdb_token: str = ""
@@ -561,7 +575,7 @@ class AppSettings:
             ),
             provider_disabled=parse_csv(os.getenv("SUBTITLE_PROVIDER_DISABLED"), []),
             request_interval_ms=max(
-                12_000,
+                MIN_REQUEST_INTERVAL_MS,
                 parse_int(os.getenv("SUBTITLE_REQUEST_INTERVAL_MS"), DEFAULT_REQUEST_INTERVAL_MS),
             ),
             movie_concurrency=max(
@@ -590,6 +604,14 @@ class AppSettings:
             provider_search_timeout=max(
                 30,
                 parse_int(os.getenv("PROVIDER_SEARCH_TIMEOUT"), DEFAULT_PROVIDER_SEARCH_TIMEOUT),
+            ),
+            subhd_download_timeout=max(
+                30,
+                parse_int(os.getenv("SUBHD_DOWNLOAD_TIMEOUT"), DEFAULT_SUBHD_DOWNLOAD_TIMEOUT),
+            ),
+            provider_download_timeout=max(
+                15,
+                parse_int(os.getenv("PROVIDER_DOWNLOAD_TIMEOUT"), DEFAULT_PROVIDER_DOWNLOAD_TIMEOUT),
             ),
             http_proxy=os.getenv("HTTP_PROXY", ""),
             https_proxy=os.getenv("HTTPS_PROXY", ""),
@@ -632,6 +654,8 @@ class AppSettings:
             ),
             "SUBHD_SEARCH_TIMEOUT": str(self.subhd_search_timeout),
             "PROVIDER_SEARCH_TIMEOUT": str(self.provider_search_timeout),
+            "SUBHD_DOWNLOAD_TIMEOUT": str(self.subhd_download_timeout),
+            "PROVIDER_DOWNLOAD_TIMEOUT": str(self.provider_download_timeout),
             "CAPTCHA_SOUND_ENABLED": "true" if self.captcha_sound_enabled else "false",
             "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR": self.package_dist_dir,
             "SUBTITLE_COLLECTION_DATA_DIR": str(self.data_dir) if self.data_dir else "",

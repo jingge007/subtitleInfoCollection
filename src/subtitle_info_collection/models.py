@@ -330,6 +330,8 @@ class TaskConfig:
     subhd_captcha_auto_submit_min_confidence: float = 0.85
     subhd_search_timeout: int = 60
     provider_search_timeout: int = 45
+    subhd_download_timeout: int = 180
+    provider_download_timeout: int = 60
     year: int = 2026  # 年份
     limit: int = 100  # 限制数量
     movie_source: str = "tmdb"  # 电影来源
