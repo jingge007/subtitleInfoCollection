@@ -328,15 +328,15 @@ class TaskConfig:
     subdl_include_traditional: bool = False
     subhd_captcha_ocr_enabled: bool = True
     subhd_captcha_auto_submit_min_confidence: float = 0.85
-    subhd_search_timeout: int = 60
-    provider_search_timeout: int = 45
+    subhd_search_timeout: int = 120
+    provider_search_timeout: int = 90
     subhd_download_timeout: int = 180
     provider_download_timeout: int = 60
     year: int = 2026  # 年份
     limit: int = 100  # 限制数量
     movie_source: str = "tmdb"  # 电影来源
     subtitle_providers: list[str] = field(  # 字幕源提供商列表
-        default_factory=lambda: ["subhd", "subdl", "assrt", "opensubtitles"]
+        default_factory=lambda: ["subhd", "opensubtitles", "assrt", "subdl"]
     )
     subtitle_min_bilingual_ratio: float = 0.70  # 下载字幕内容双语条目最低占比
     request_interval_ms: int = 8_000  # 请求间隔（毫秒）
@@ -352,7 +352,7 @@ class TaskConfig:
     opensubtitles_base_url: str = "https://api.opensubtitles.com/api/v1"  # OpenSubtitles API基础URL
     opensubtitles_user_agent: str = "subtitleInfoCollection v0.1"  # OpenSubtitles用户代理
     provider_priority: list[str] = field(  # 字幕源优先级
-        default_factory=lambda: ["subhd", "subdl", "assrt", "opensubtitles"]
+        default_factory=lambda: ["subhd", "opensubtitles", "assrt", "subdl"]
     )
     provider_disabled: list[str] = field(default_factory=list)  # 禁用的字幕源
     proxies: dict[str, str] = field(default_factory=dict)  # 代理设置
@@ -366,7 +366,7 @@ def failure_reason_cn(error_type: str, provider: str = "", raw: str = "") -> str
         "NO_MATCH": "没有找到符合要求的简体中文 + 英文双语 ass/srt 字幕。",
         "PARSE_FAILED": "页面或接口结构异常，目标站点可能已经变化。",
         "DOWNLOAD_BLOCKED": "下载被阻止，可能需要登录、验证码或被站点拦截。",
-        "DOWNLOAD_QUOTA_EXCEEDED": "OpenSubtitles 下载额度已用完或账号权限不足，请等待额度重置、升级账号，或暂时禁用该字幕源下载。",
+        "DOWNLOAD_QUOTA_EXCEEDED": "字幕源下载额度已用完（如 SubDL 免费档日下载上限、OpenSubtitles 日配额），请等待额度重置、升级账号，或暂时禁用该字幕源。",
         "DOWNLOAD_FAILED": "字幕下载失败，可能是下载链接失效、压缩包异常或保存失败。",
         "PROVIDER_DISABLED": "字幕源未启用或缺少必要配置。",
         "VERIFICATION_REQUIRED": "需要验证码验证，本条字幕未能自动完成下载。",

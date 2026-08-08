@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -29,6 +29,32 @@ _TRANSIENT_HTTPX_ERRORS = (
     httpx.NetworkError,
 )
 
+# 官方文档：主域网络不通时可用备用域名 api.makedie.me
+_DEFAULT_ASSRT_BASE = "https://api.assrt.net/v1"
+_FALLBACK_ASSRT_BASE = "https://api.makedie.me/v1"
+
+# ASSRT JSON status → (错误类型, 中文说明模板)；模板可用 {detail}
+_ASSRT_STATUS_ERRORS: dict[int, tuple[str, str]] = {
+    1: (ErrorType.PROVIDER_DISABLED, "用户不存在（status=1），请检查 ASSRT_TOKEN"),
+    101: (
+        ErrorType.PARSE_FAILED,
+        "搜索关键词过短（须大于 3 个字符，status=101）{detail}",
+    ),
+    20000: (ErrorType.PARSE_FAILED, "请求缺少必要参数（status=20000）{detail}"),
+    20001: (ErrorType.PROVIDER_DISABLED, "Token 无效（status=20001），请检查 ASSRT_TOKEN"),
+    20400: (ErrorType.PARSE_FAILED, "API 终结点不存在（status=20400）{detail}"),
+    20900: (ErrorType.NO_MATCH, "字幕不存在（status=20900）{detail}"),
+    30000: (ErrorType.DOWNLOAD_FAILED, "ASSRT 服务端异常（status=30000）{detail}"),
+    30001: (ErrorType.DOWNLOAD_FAILED, "ASSRT 数据库不可用（status=30001）{detail}"),
+    30002: (ErrorType.DOWNLOAD_FAILED, "ASSRT 搜索引擎不可用（status=30002）{detail}"),
+    30300: (ErrorType.DOWNLOAD_FAILED, "ASSRT API 暂时不可用（status=30300）{detail}"),
+    30900: (
+        ErrorType.RATE_LIMITED,
+        "ASSRT API 配额超限（约 20 次/分钟，status=30900），请降低请求频率后重试",
+    ),
+}
+
+
 class AssrtProvider:
     id = "assrt"
     download_supported = True
@@ -36,11 +62,12 @@ class AssrtProvider:
     def __init__(
         self,
         token: str = "",
-        base_url: str = "https://api.assrt.net/v1",
+        base_url: str = _DEFAULT_ASSRT_BASE,
         request_interval_ms: int = 500,
         timeout: float = 30,
         proxy: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        fallback_base_urls: list[str] | None = None,
     ) -> None:
         self.token = token
         self.base_url = base_url.rstrip("/")
@@ -49,6 +76,15 @@ class AssrtProvider:
         self.proxy = proxy
         self.transport = transport
         self._last_request = 0.0
+        # 主域失败后尝试的备用 API 根路径（不含 endpoint）
+        if fallback_base_urls is not None:
+            self.fallback_base_urls = [item.rstrip("/") for item in fallback_base_urls if item]
+        else:
+            fallbacks: list[str] = []
+            if self.base_url != _FALLBACK_ASSRT_BASE.rstrip("/"):
+                fallbacks.append(_FALLBACK_ASSRT_BASE.rstrip("/"))
+            self.fallback_base_urls = fallbacks
+        self._active_base_url = self.base_url
 
     async def health(self) -> ProviderHealth:
         if not self.token:
@@ -91,6 +127,81 @@ class AssrtProvider:
             transport=self.transport,
         )
 
+    def _host_of(self, base_url: str) -> str:
+        return urlparse(base_url).netloc or base_url
+
+    def _api_bases(self) -> list[str]:
+        bases = [self._active_base_url]
+        for item in [self.base_url, *self.fallback_base_urls]:
+            if item and item not in bases:
+                bases.append(item)
+        return bases
+
+    def _fallback_hint(self, tried_base: str) -> str:
+        unused = [item for item in self.fallback_base_urls if item != tried_base]
+        if unused:
+            return (
+                f"可改 ASSRT_API_BASE_URL={unused[0]} "
+                f"（官方备用域名），或检查 HTTPS_PROXY/网络"
+            )
+        if tried_base != _FALLBACK_ASSRT_BASE.rstrip("/"):
+            return (
+                f"可将 ASSRT_API_BASE_URL 设为 {_FALLBACK_ASSRT_BASE} "
+                f"（官方备用域名），或检查 HTTPS_PROXY/网络"
+            )
+        return "请检查 HTTPS_PROXY/网络，或确认 ASSRT_API_BASE_URL 是否正确"
+
+    # 将瞬时网络异常整理为可读中文说明
+    def _network_error_message(
+        self,
+        exc: Exception,
+        *,
+        base_url: str,
+        endpoint: str,
+        stage: str,
+    ) -> str:
+        host = self._host_of(base_url)
+        target = f"{base_url}{endpoint}"
+        name = type(exc).__name__
+        hint = self._fallback_hint(base_url)
+        if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+            return (
+                f"无法连接 ASSRT API 主机 {host}（{name}），目标 {target}。"
+                f"{hint}"
+            )
+        if isinstance(exc, httpx.ReadTimeout):
+            return f"ASSRT 已连通但响应超时（{name}）：{target}。可增大超时或检查网络稳定性"
+        if isinstance(exc, httpx.RemoteProtocolError):
+            return f"ASSRT 连接中断（{name}）：{target}。请稍后重试或检查代理"
+        return f"ASSRT {stage} 网络异常（{name}）：{target}。{hint}"
+
+    # 解析 ASSRT JSON status 非 0 的业务错误
+    def _raise_for_payload_status(self, payload: dict, *, keyword: str = "") -> None:
+        status = payload.get("status")
+        if status in (None, 0):
+            return
+        try:
+            status_code = int(status)
+        except (TypeError, ValueError):
+            status_code = -1
+        detail_raw = payload.get("error") or payload.get("message") or ""
+        detail = f"：{detail_raw}" if detail_raw else ""
+        if keyword and status_code == 101:
+            detail = f"：q={keyword}{detail}"
+        mapped = _ASSRT_STATUS_ERRORS.get(status_code)
+        if mapped:
+            error_type, template = mapped
+            raise CollectorError(
+                template.format(detail=detail),
+                error_type,
+                self.id,
+            )
+        raise CollectorError(
+            f"ASSRT 返回业务错误 status={status}{detail}",
+            ErrorType.PARSE_FAILED,
+            self.id,
+        )
+
     async def _request_json(
         self,
         endpoint: str,
@@ -98,68 +209,115 @@ class AssrtProvider:
         log: LogCallback | None = None,
         stage: str = "assrt.request",
     ) -> dict:
-        await self._rate_limit()
         last_exc: Exception | None = None
-        for attempt in range(1, 4):
-            try:
-                async with self._client() as client:
-                    response = await client.get(
-                        f"{self.base_url}{endpoint}",
-                        params={"token": self.token, **params},
-                        headers={
-                            "Accept": "application/json",
-                            "User-Agent": "subtitleInfoCollection/0.1",
-                        },
+        last_message = ""
+        bases = self._api_bases()
+        for base_index, base_url in enumerate(bases):
+            switch_to_fallback = False
+            for attempt in range(1, 4):
+                await self._rate_limit()
+                try:
+                    async with self._client() as client:
+                        response = await client.get(
+                            f"{base_url}{endpoint}",
+                            params={"token": self.token, **params},
+                            headers={
+                                "Accept": "application/json",
+                                "User-Agent": "subtitleInfoCollection/0.1",
+                            },
+                        )
+                        if response.status_code in {429, 509}:
+                            raise CollectorError(
+                                f"ASSRT HTTP {response.status_code} 限流/过载，主机 "
+                                f"{self._host_of(base_url)}",
+                                ErrorType.RATE_LIMITED,
+                                self.id,
+                            )
+                        response.raise_for_status()
+                        payload = response.json()
+                    if base_url != self._active_base_url:
+                        self._emit(
+                            f"{stage}.fallback",
+                            "ASSRT 已切换到备用 API 主机",
+                            log,
+                            host=self._host_of(base_url),
+                            base_url=base_url,
+                        )
+                        self._active_base_url = base_url
+                    self._raise_for_payload_status(
+                        payload if isinstance(payload, dict) else {},
+                        keyword=str(params.get("q") or ""),
                     )
-                    if response.status_code in {429, 509}:
-                        raise CollectorError(f"HTTP {response.status_code}", ErrorType.RATE_LIMITED, self.id)
-                    response.raise_for_status()
-                    payload = response.json()
-                    break
-            except _TRANSIENT_HTTPX_ERRORS as exc:
-                last_exc = exc
-                error_text = str(exc) or repr(exc)
-                if attempt >= 3:
+                    return payload if isinstance(payload, dict) else {}
+                except CollectorError:
+                    raise
+                except _TRANSIENT_HTTPX_ERRORS as exc:
+                    last_exc = exc
+                    last_message = self._network_error_message(
+                        exc, base_url=base_url, endpoint=endpoint, stage=stage
+                    )
+                    if attempt < 3:
+                        self._emit(
+                            f"{stage}.retry",
+                            last_message + f"；准备重试（{attempt}/3）",
+                            log,
+                            endpoint=endpoint,
+                            host=self._host_of(base_url),
+                            attempt=attempt,
+                            error_type=type(exc).__name__,
+                        )
+                        await asyncio.sleep(0.2 * attempt)
+                        continue
+                    can_try_fallback = (
+                        isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+                        and base_index + 1 < len(bases)
+                    )
+                    if can_try_fallback:
+                        next_base = bases[base_index + 1]
+                        self._emit(
+                            f"{stage}.failover",
+                            (
+                                f"主域 {self._host_of(base_url)} 连续连接失败，"
+                                f"切换备用域 {self._host_of(next_base)}"
+                            ),
+                            log,
+                            from_base=base_url,
+                            to_base=next_base,
+                        )
+                        switch_to_fallback = True
+                        break
                     self._emit(
                         f"{stage}.fail",
-                        "ASSRT 请求网络异常，已停止重试",
+                        last_message + "；已停止重试",
                         log,
                         endpoint=endpoint,
+                        host=self._host_of(base_url),
                         attempt=attempt,
                         error_type=type(exc).__name__,
-                        error=error_text,
                     )
                     raise CollectorError(
-                        f"{type(exc).__name__}: {error_text}",
+                        last_message,
                         ErrorType.NETWORK_UNREACHABLE,
                         self.id,
                     ) from exc
-                self._emit(
-                    f"{stage}.retry",
-                    "ASSRT 请求网络异常，准备重试",
-                    log,
-                    endpoint=endpoint,
-                    attempt=attempt,
-                    error_type=type(exc).__name__,
-                    error=error_text,
-                )
-                await asyncio.sleep(0.2 * attempt)
-            except httpx.HTTPError as exc:
-                error_text = str(exc) or repr(exc)
-                raise CollectorError(
-                    f"{type(exc).__name__}: {error_text}",
-                    ErrorType.NETWORK_UNREACHABLE,
-                    self.id,
-                ) from exc
-        else:
-            raise CollectorError(
-                f"ASSRT 请求失败：{last_exc!r}",
-                ErrorType.NETWORK_UNREACHABLE,
-                self.id,
-            )
-        if payload.get("status") not in (None, 0):
-            raise CollectorError(str(payload.get("error") or payload), ErrorType.PARSE_FAILED, self.id)
-        return payload
+                except httpx.HTTPError as exc:
+                    error_text = str(exc) or repr(exc)
+                    message = (
+                        f"ASSRT HTTP 错误（{type(exc).__name__}）："
+                        f"{base_url}{endpoint} — {error_text}"
+                    )
+                    raise CollectorError(
+                        message,
+                        ErrorType.NETWORK_UNREACHABLE,
+                        self.id,
+                    ) from exc
+            if switch_to_fallback:
+                continue
+        raise CollectorError(
+            last_message or f"ASSRT 请求失败：{last_exc!r}",
+            ErrorType.NETWORK_UNREACHABLE,
+            self.id,
+        )
 
     async def search(
         self,
@@ -175,7 +333,8 @@ class AssrtProvider:
                 "ASSRT 尝试关键词搜索",
                 log,
                 keyword=keyword,
-                base_url=self.base_url,
+                base_url=self._active_base_url,
+                host=self._host_of(self._active_base_url),
             )
             payload = await self._request_json(
                 "/sub/search",
@@ -275,7 +434,8 @@ class AssrtProvider:
             try:
                 await self._rate_limit()
                 async with self._client() as client:
-                    full_url = urljoin(self.base_url, download_url)
+                    full_url = urljoin(self._active_base_url + "/", download_url)
+                    download_host = urlparse(full_url).netloc or full_url
                     response = await client.get(
                         full_url,
                         headers={
@@ -286,7 +446,7 @@ class AssrtProvider:
                     )
                     if response.status_code in {429, 509}:
                         raise CollectorError(
-                            f"HTTP {response.status_code}",
+                            f"ASSRT 字幕文件下载限流 HTTP {response.status_code}，主机 {download_host}",
                             ErrorType.RATE_LIMITED,
                             self.id,
                         )
@@ -298,6 +458,7 @@ class AssrtProvider:
                         subtitle_id=candidate.provider_subtitle_id,
                         size=str(len(response.content)),
                         file=file_name,
+                        host=download_host,
                     )
                     return [
                         DownloadedPayload(
@@ -307,41 +468,48 @@ class AssrtProvider:
                             content_type=response.headers.get("content-type", ""),
                         )
                     ]
+            except CollectorError:
+                raise
             except _TRANSIENT_HTTPX_ERRORS as exc:
                 last_exc = exc
+                full_url = urljoin(self._active_base_url + "/", download_url)
+                download_host = urlparse(full_url).netloc or full_url
                 error_text = str(exc) or repr(exc)
+                message = (
+                    f"ASSRT 字幕文件下载失败，主机={download_host}（{type(exc).__name__}）："
+                    f"{error_text}。注意：文件域名可能与 API 主机不同"
+                )
                 if attempt >= 3:
                     self._emit(
                         "assrt.download.fail",
-                        "ASSRT 下载文件网络异常，已停止重试",
+                        message + "；已停止重试",
                         log=context.log,
                         subtitle_id=candidate.provider_subtitle_id,
-                        base_url=self.base_url,
-                        endpoint=download_url,
+                        host=download_host,
                         attempt=str(attempt),
                         error_type=type(exc).__name__,
-                        error=error_text,
                     )
                     raise CollectorError(
-                        f"{type(exc).__name__}: {error_text}",
+                        message,
                         ErrorType.NETWORK_UNREACHABLE,
                         self.id,
                     ) from exc
                 self._emit(
                     "assrt.download.retry",
-                    "ASSRT 下载文件网络异常，准备重试",
+                    message + f"；准备重试（{attempt}/3）",
                     log=context.log,
                     subtitle_id=candidate.provider_subtitle_id,
-                    base_url=self.base_url,
-                    endpoint=download_url,
+                    host=download_host,
                     attempt=str(attempt),
                     error_type=type(exc).__name__,
-                    error=error_text,
                 )
                 await asyncio.sleep(0.2 * attempt)
             except httpx.HTTPError as exc:
                 error_text = str(exc) or repr(exc)
+                full_url = urljoin(self._active_base_url + "/", download_url)
+                download_host = urlparse(full_url).netloc or full_url
                 raise CollectorError(
+                    f"ASSRT 字幕文件下载 HTTP 错误，主机={download_host}："
                     f"{type(exc).__name__}: {error_text}",
                     ErrorType.NETWORK_UNREACHABLE,
                     self.id,

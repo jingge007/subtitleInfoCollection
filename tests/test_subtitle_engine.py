@@ -217,3 +217,57 @@ def test_validate_downloaded_subtitle_bytes_lenient_still_rejects_chinese_only_c
     assert not validation.valid
     assert validation.error_type == "CONTENT_VALIDATION_FAILED"
 
+
+def test_looks_like_english_only_candidate_detects_eng_filename():
+    from subtitle_info_collection.engines.subtitle_engine import looks_like_english_only_candidate
+    from subtitle_info_collection.models import SubtitleCandidate
+
+    eng = SubtitleCandidate(
+        provider="subdl",
+        provider_subtitle_id="1",
+        movie_id="m1",
+        movie_title="Inception",
+        subtitle_title="Inception.2010.1080p.eng.srt",
+        language_type="English",
+        file_names=["Inception.2010.1080p.eng.srt"],
+    )
+    bilingual = SubtitleCandidate(
+        provider="subdl",
+        provider_subtitle_id="2",
+        movie_id="m1",
+        movie_title="Inception",
+        subtitle_title="Inception.2010.chs&eng.srt",
+        language_type="双语",
+        file_names=["Inception.2010.chs&eng.srt"],
+    )
+    assert looks_like_english_only_candidate(eng) is True
+    assert looks_like_english_only_candidate(bilingual) is False
+
+
+def test_validate_candidate_metadata_lenient_rejects_english_only_language_type():
+    validation = validate_candidate_metadata(
+        make_candidate(
+            subtitle_title="Inception.2010.1080p.srt",
+            language_type="English",
+            subtitle_format="srt",
+            description="English subtitle",
+        ),
+        lenient=True,
+    )
+    assert not validation.valid
+    assert validation.error_type == "INVALID_LANGUAGE"
+    assert "中文与英文" in validation.reason
+
+
+def test_validate_candidate_metadata_lenient_accepts_chinese_and_english_markers():
+    validation = validate_candidate_metadata(
+        make_candidate(
+            subtitle_title="盗梦空间.2010.中英.srt",
+            language_type="中文",
+            subtitle_format="srt",
+            description="Chinese English",
+        ),
+        lenient=True,
+    )
+    assert validation.valid
+

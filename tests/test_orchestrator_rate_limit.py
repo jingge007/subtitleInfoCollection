@@ -315,3 +315,210 @@ async def test_download_timeout_fails_fast(tmp_path: Path):
     assert results == []
     assert elapsed < 5.0
     assert any("超时" in (item.error or "") for item in failed)
+
+
+@pytest.mark.asyncio
+async def test_network_unreachable_opens_circuit_after_threshold(tmp_path: Path):
+    class AlwaysDown(FakeProvider):
+        async def search(self, movie: MovieInfo, log=None):
+            raise CollectorError("模拟不可达", ErrorType.NETWORK_UNREACHABLE, self.id)
+
+    provider = AlwaysDown("assrt")
+    orch = SubtitleCollectionOrchestrator()
+    config = TaskConfig(request_interval_ms=0, output_root=tmp_path)
+    stats = {
+        "assrt": {
+            "downloadCount": 0,
+            "downloadAttemptCount": 0,
+            "searchCount": 0,
+            "hitCount": 0,
+            "noMatchCount": 0,
+            "errorCount": 0,
+            "filteredCount": 0,
+            "skippedEnglishCount": 0,
+            "circuitOpen": False,
+            "lastError": "",
+            "lastErrorType": "",
+        }
+    }
+    failed: list = []
+    streak = {"assrt": 0}
+    blocked: set[str] = set()
+
+    await orch._collect_movie_candidates(
+        movie=_movie(),
+        providers=[provider],
+        config=config,
+        stats=stats,
+        failed_records=failed,
+        network_fail_streak=streak,
+        network_blocked_providers=blocked,
+    )
+    assert "assrt" not in blocked
+    assert streak["assrt"] == 1
+
+    await orch._collect_movie_candidates(
+        movie=_movie("Other"),
+        providers=[provider],
+        config=config,
+        stats=stats,
+        failed_records=failed,
+        network_fail_streak=streak,
+        network_blocked_providers=blocked,
+    )
+    assert "assrt" in blocked
+    assert stats["assrt"]["circuitOpen"] is True
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_download_retries_once_then_returns(tmp_path: Path):
+    class AlwaysRateLimited(FakeProvider):
+        async def download(self, candidate: SubtitleCandidate, context: DownloadContext):
+            self._download_attempts += 1
+            raise CollectorError("模拟限流", ErrorType.RATE_LIMITED, self.id)
+
+    provider = AlwaysRateLimited("subdl")
+    orch = SubtitleCollectionOrchestrator()
+    config = TaskConfig(request_interval_ms=0, provider_download_timeout=30, output_root=tmp_path)
+    paths = type("P", (), {"download_dir": tmp_path})()
+    stats = {
+        "subdl": {
+            "downloadCount": 0,
+            "downloadAttemptCount": 0,
+            "searchCount": 0,
+            "hitCount": 0,
+            "noMatchCount": 0,
+            "errorCount": 0,
+            "filteredCount": 0,
+            "skippedEnglishCount": 0,
+            "circuitOpen": False,
+            "lastError": "",
+            "lastErrorType": "",
+        }
+    }
+    failed: list = []
+    results: list = []
+
+    async def no_wait(_seconds: float) -> bool:
+        return False
+
+    orch.control.interruptible_sleep = no_wait  # type: ignore[method-assign]
+    error = await orch._download_best(
+        best=_candidate("subdl"),
+        providers=[provider],
+        config=config,
+        paths=paths,
+        stats=stats,
+        failed_records=failed,
+        download_results=results,
+    )
+    assert error == ErrorType.RATE_LIMITED
+    # 初次 + 1 次重试
+    assert provider._download_attempts == 2
+    assert stats["subdl"]["lastErrorType"] == ErrorType.RATE_LIMITED
+
+
+@pytest.mark.asyncio
+async def test_search_rate_limited_opens_circuit_after_threshold():
+    class RateLimitedSearch(FakeProvider):
+        async def search(self, movie: MovieInfo, log=None):
+            raise CollectorError("模拟搜索限流", ErrorType.RATE_LIMITED, self.id)
+
+    provider = RateLimitedSearch("subdl")
+    orch = SubtitleCollectionOrchestrator()
+    config = TaskConfig(request_interval_ms=0)
+    stats = {
+        "subdl": {
+            "downloadCount": 0,
+            "downloadAttemptCount": 0,
+            "searchCount": 0,
+            "hitCount": 0,
+            "noMatchCount": 0,
+            "errorCount": 0,
+            "filteredCount": 0,
+            "skippedEnglishCount": 0,
+            "circuitOpen": False,
+            "lastError": "",
+            "lastErrorType": "",
+        }
+    }
+    failed: list = []
+    download_blocked: set[str] = set()
+    rate_streak = {"subdl": 0}
+
+    await orch._collect_movie_candidates(
+        movie=_movie(),
+        providers=[provider],
+        config=config,
+        stats=stats,
+        failed_records=failed,
+        download_blocked_providers=download_blocked,
+        rate_limit_fail_streak=rate_streak,
+    )
+    assert "subdl" not in download_blocked
+    assert rate_streak["subdl"] == 1
+
+    await orch._collect_movie_candidates(
+        movie=_movie("Other"),
+        providers=[provider],
+        config=config,
+        stats=stats,
+        failed_records=failed,
+        download_blocked_providers=download_blocked,
+        rate_limit_fail_streak=rate_streak,
+    )
+    assert "subdl" in download_blocked
+    assert stats["subdl"]["circuitOpen"] is True
+
+
+@pytest.mark.asyncio
+async def test_subhd_search_timeout_does_not_open_network_circuit():
+    # SubHD 搜索超时只换源，不计入本轮网络熔断
+    class SlowSubhd(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__("subhd")
+            self.search_calls = 0
+
+        async def search(self, movie: MovieInfo, log=None):
+            self.search_calls += 1
+            await asyncio.sleep(10)
+            return []
+
+    provider = SlowSubhd()
+    orch = SubtitleCollectionOrchestrator()
+    config = TaskConfig(request_interval_ms=0, subhd_search_timeout=1)
+    stats = {
+        "subhd": {
+            "downloadCount": 0,
+            "downloadAttemptCount": 0,
+            "searchCount": 0,
+            "hitCount": 0,
+            "noMatchCount": 0,
+            "errorCount": 0,
+            "filteredCount": 0,
+            "skippedEnglishCount": 0,
+            "circuitOpen": False,
+            "lastError": "",
+            "lastErrorType": "",
+        }
+    }
+    failed: list = []
+    streak = {"subhd": 0}
+    blocked: set[str] = set()
+
+    for title in ("Movie A", "Movie B", "Movie C"):
+        await orch._collect_movie_candidates(
+            movie=_movie(title),
+            providers=[provider],
+            config=config,
+            stats=stats,
+            failed_records=failed,
+            network_fail_streak=streak,
+            network_blocked_providers=blocked,
+        )
+
+    assert "subhd" not in blocked
+    assert streak["subhd"] == 0
+    assert stats["subhd"]["circuitOpen"] is False
+    assert provider.search_calls == 3
+    assert stats["subhd"]["errorCount"] == 3

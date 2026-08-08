@@ -12,11 +12,12 @@ except ImportError:  # pragma: no cover
     load_dotenv = None
 
 
-DEFAULT_PROVIDER_PRIORITY = ["subhd", "subdl", "assrt", "opensubtitles"]
+DEFAULT_PROVIDER_PRIORITY = ["subhd", "opensubtitles", "assrt", "subdl"]
 DEFAULT_REQUEST_INTERVAL_MS = 8_000
 DEFAULT_MOVIE_CONCURRENCY = 2
 DEFAULT_MIN_BILINGUAL_RATIO = 0.70
 DEFAULT_SUBHD_SEARCH_TIMEOUT = 120
+DEFAULT_SUBDL_LANGUAGES = "ZH"
 DEFAULT_PROVIDER_SEARCH_TIMEOUT = 90
 DEFAULT_SUBHD_DOWNLOAD_TIMEOUT = 180
 DEFAULT_PROVIDER_DOWNLOAD_TIMEOUT = 60
@@ -26,9 +27,9 @@ ASSRT_INTERNAL_INTERVAL_MS = 500
 MIN_REQUEST_INTERVAL_MS = 8_000
 PROVIDER_LABELS = {
     "subhd": "SubHD",
-    "subdl": "SubDL",
-    "assrt": "ASSRT",
     "opensubtitles": "OpenSubtitles",
+    "assrt": "ASSRT",
+    "subdl": "SubDL",
 }
 
 # 配置项页分组标识
@@ -246,7 +247,7 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
     ),
     EnvFieldMeta(
         "SUBTITLE_PROVIDER_PRIORITY", "字幕源优先级", CONFIG_GROUP_STRATEGY, "text",
-        "逗号分隔：subhd,subdl,assrt,opensubtitles；越靠前越优先。", "provider_priority",
+        "逗号分隔：subhd,opensubtitles,assrt,subdl；越靠前越优先。", "provider_priority",
     ),
     EnvFieldMeta(
         "SUBTITLE_PROVIDER_DISABLED", "禁用字幕源", CONFIG_GROUP_STRATEGY, "text",
@@ -306,7 +307,7 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
     ),
     EnvFieldMeta(
         "ASSRT_API_BASE_URL", "ASSRT API 地址", CONFIG_GROUP_NETWORK, "text",
-        "通常保持默认；变更官方地址或使用代理网关时修改。", "assrt_api_base_url",
+        "默认 api.assrt.net；网络不通时可改 api.makedie.me（程序也会自动回退）。", "assrt_api_base_url",
     ),
     EnvFieldMeta(
         "SUBDL_BASE_URL", "SubDL 搜索地址", CONFIG_GROUP_NETWORK, "text",
@@ -318,7 +319,7 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
     ),
     EnvFieldMeta(
         "SUBDL_LANGUAGES", "SubDL 语言", CONFIG_GROUP_NETWORK, "text",
-        "逗号分隔，默认 ZH,EN。", "subdl_languages",
+        "逗号分隔，默认 ZH（减少纯英召回；仍须过双语内容校验）。", "subdl_languages",
     ),
     EnvFieldMeta(
         "SUBDL_INCLUDE_TRADITIONAL", "SubDL 含繁体", CONFIG_GROUP_NETWORK, "bool",
@@ -447,20 +448,6 @@ def evaluate_config(
             detail="无需 Token，可直接搜索，下载时可能需要验证码。",
         ),
         ProviderConfigStatus(
-            id="subdl",
-            label=PROVIDER_LABELS["subdl"],
-            enabled="subdl" not in disabled,
-            configured=bool(settings.subdl_api_key.strip()),
-            detail="需要 SUBDL_API_KEY；默认语言 ZH,EN 用于扩大中英双语候选召回。",
-        ),
-        ProviderConfigStatus(
-            id="assrt",
-            label=PROVIDER_LABELS["assrt"],
-            enabled="assrt" not in disabled,
-            configured=bool(settings.assrt_token.strip()),
-            detail="需要 ASSRT_TOKEN 才能启用。",
-        ),
-        ProviderConfigStatus(
             id="opensubtitles",
             label=PROVIDER_LABELS["opensubtitles"],
             enabled="opensubtitles" not in disabled,
@@ -470,6 +457,20 @@ def evaluate_config(
                 and settings.opensubtitles_password.strip()
             ),
             detail="需要 API Key、用户名和密码，搜索与下载才完整可用。",
+        ),
+        ProviderConfigStatus(
+            id="assrt",
+            label=PROVIDER_LABELS["assrt"],
+            enabled="assrt" not in disabled,
+            configured=bool(settings.assrt_token.strip()),
+            detail="需要 ASSRT_TOKEN 才能启用。",
+        ),
+        ProviderConfigStatus(
+            id="subdl",
+            label=PROVIDER_LABELS["subdl"],
+            enabled="subdl" not in disabled,
+            configured=bool(settings.subdl_api_key.strip()),
+            detail="需要 SUBDL_API_KEY；默认语言 ZH，最终仍以下载后中英双语校验为准。",
         ),
     ]
 
@@ -504,7 +505,7 @@ class AppSettings:
     subdl_api_key: str = ""
     subdl_base_url: str = "https://api.subdl.com/api/v1"
     subdl_download_base_url: str = "https://dl.subdl.com"
-    subdl_languages: str = "ZH,EN"
+    subdl_languages: str = DEFAULT_SUBDL_LANGUAGES
     subdl_include_traditional: bool = False
     subtitle_min_bilingual_ratio: float = DEFAULT_MIN_BILINGUAL_RATIO
     subhd_captcha_ocr_enabled: bool = True
@@ -550,7 +551,7 @@ class AppSettings:
             subdl_api_key=os.getenv("SUBDL_API_KEY", ""),
             subdl_base_url=os.getenv("SUBDL_BASE_URL", "https://api.subdl.com/api/v1"),
             subdl_download_base_url=os.getenv("SUBDL_DOWNLOAD_BASE_URL", "https://dl.subdl.com"),
-            subdl_languages=os.getenv("SUBDL_LANGUAGES", "ZH,EN"),
+            subdl_languages=os.getenv("SUBDL_LANGUAGES", DEFAULT_SUBDL_LANGUAGES),
             subdl_include_traditional=parse_bool(os.getenv("SUBDL_INCLUDE_TRADITIONAL"), False),
             subtitle_min_bilingual_ratio=parse_ratio(
                 os.getenv("SUBTITLE_MIN_BILINGUAL_RATIO"), DEFAULT_MIN_BILINGUAL_RATIO

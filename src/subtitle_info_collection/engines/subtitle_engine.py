@@ -780,12 +780,13 @@ def validate_candidate_metadata(candidate: SubtitleCandidate, lenient: bool = Fa
                 reason="候选字幕为繁体中文，非简体中英双语字幕（宽松模式仍排除）",
                 subtitle_format=subtitle_format,
             )
-        if has_any_chinese or candidate.language_type:
+        # 宽松仍要求中英两侧标记；禁止仅因 language_type 非空（如 English）放行
+        if has_any_chinese and (has_english or has_bilingual):
             return CandidateValidation(valid=True, subtitle_format=subtitle_format)
         return CandidateValidation(
             valid=False,
             error_type=ErrorType.INVALID_LANGUAGE,
-            reason="候选字幕未包含任何中文标记",
+            reason="候选字幕未同时标记中文与英文（宽松模式）",
             subtitle_format=subtitle_format,
         )
 
@@ -798,6 +799,33 @@ def validate_candidate_metadata(candidate: SubtitleCandidate, lenient: bool = Fa
         )
 
     return CandidateValidation(valid=True, subtitle_format=subtitle_format)
+
+
+# 元数据层面像「纯英」：无中文/双语标记且带英文标记（用于下载前跳过空转）
+def looks_like_english_only_candidate(candidate: SubtitleCandidate) -> bool:
+    if _check_language_type_bilingual(candidate.language_type):
+        return False
+    if _check_language_type_has_chinese_and_english(candidate.language_type):
+        return False
+    text = candidate_text(candidate)
+    has_simplified = bool(SIMPLIFIED_MARKER_RE.search(text))
+    has_bilingual = bool(BILINGUAL_MARKER_RE.search(text))
+    has_any_chinese = bool(ANY_CHINESE_MARKER_RE.search(text))
+    if has_simplified or has_bilingual or has_any_chinese:
+        return False
+    # 文件名常见纯英后缀：.eng / eng.srt / English
+    name_blob = " ".join(
+        str(part)
+        for part in [candidate.subtitle_title, *candidate.file_names, candidate.language_type]
+        if part
+    )
+    if re.search(r"(?:^|[.\s_-])eng(?:lish)?(?:[.\s_-]|$)", name_blob, re.I):
+        return True
+    language_blob = str(candidate.language_type or "").strip()
+    if language_blob and re.fullmatch(r"(?:en|eng|english|英文|英语)", language_blob, re.I):
+        return True
+    has_english = bool(ENGLISH_MARKER_RE.search(text))
+    return has_english and not has_any_chinese
 
 
 def validate_downloaded_subtitle_bytes(
@@ -942,7 +970,9 @@ def validate_downloaded_subtitle_bytes(
         valid=False,
         error_type=ErrorType.CONTENT_VALIDATION_FAILED,
         reason=(
-            f"双语占比不足({_format_percent(bilingual_ratio)})"
+            f"双语占比不足({_format_percent(bilingual_ratio)})，实质接近纯英/伪双语"
+            if bilingual_ratio < 0.05
+            else f"双语占比不足({_format_percent(bilingual_ratio)})"
         ),
         subtitle_format=normalized_format,
         encoding=decoded.encoding,

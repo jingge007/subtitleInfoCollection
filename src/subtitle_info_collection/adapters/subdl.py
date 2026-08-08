@@ -17,6 +17,17 @@ from ..models import (
 )
 from .base import DownloadContext, LogCallback, ProviderHealth
 
+# SubDL 429 body.error：日配额 vs 短时限流（与 Bazarr/官方语义对齐）
+_SUBDL_DOWNLOAD_QUOTA_ERRORS = frozenset(
+    {
+        "daily_limit",
+        "api_download_limit_exceeded",
+        "download_limit",
+        "quota_exceeded",
+    }
+)
+_SUBDL_RATE_LIMIT_ERRORS = frozenset({"rate_limit", "service_busy"})
+
 
 class SubdlProvider:
     id = "subdl"
@@ -27,7 +38,7 @@ class SubdlProvider:
         api_key: str = "",
         base_url: str = "https://api.subdl.com/api/v1",
         download_base_url: str = "https://dl.subdl.com",
-        languages: str = "ZH,EN",
+        languages: str = "ZH",
         include_traditional: bool = False,
         timeout: float = 30,
         proxy: str | None = None,
@@ -39,6 +50,58 @@ class SubdlProvider:
         self.include_traditional = include_traditional
         self.timeout = timeout
         self.proxy = proxy
+
+    # 从 429 响应解析错误码与可读信息
+    def _parse_429_payload(self, response: httpx.Response) -> tuple[str, str]:
+        try:
+            payload = response.json()
+        except ValueError:
+            text = (response.text or "").strip()
+            return "", text
+        if not isinstance(payload, dict):
+            return "", str(payload)
+        error_code = str(payload.get("error") or payload.get("code") or "").strip()
+        message = str(payload.get("message") or payload.get("error") or "").strip()
+        return error_code, message
+
+    # 将 HTTP 429 归类为日配额或短时限流
+    def _raise_for_429(self, response: httpx.Response, *, operation: str) -> None:
+        error_code, detail = self._parse_429_payload(response)
+        code_lower = error_code.lower()
+        detail_lower = detail.lower()
+        suffix = f"：{detail}" if detail else ""
+        if (
+            code_lower in _SUBDL_DOWNLOAD_QUOTA_ERRORS
+            or "daily" in code_lower
+            or "download_limit" in code_lower
+            or "daily" in detail_lower
+            or "download limit" in detail_lower
+        ):
+            raise CollectorError(
+                f"SubDL 每日下载额度已用完（免费档约 50 次/天）{suffix}。"
+                f"请等待配额重置、升级 SubDL Pro，或暂时禁用 subdl",
+                ErrorType.DOWNLOAD_QUOTA_EXCEEDED,
+                self.id,
+            )
+        if code_lower in _SUBDL_RATE_LIMIT_ERRORS or "rate" in code_lower:
+            raise CollectorError(
+                f"SubDL 短时请求频率受限（429）{suffix}",
+                ErrorType.RATE_LIMITED,
+                self.id,
+            )
+        # 下载侧无明确 body 时优先按日配额处理（免费档常见撞墙形态）
+        if operation == "download":
+            raise CollectorError(
+                f"SubDL 下载返回 429，疑似每日下载额度已用完{suffix}。"
+                f"请等待配额重置或升级 Pro；若为短时限流可稍后重试",
+                ErrorType.DOWNLOAD_QUOTA_EXCEEDED,
+                self.id,
+            )
+        raise CollectorError(
+            f"SubDL 搜索返回 429 限流{suffix}",
+            ErrorType.RATE_LIMITED,
+            self.id,
+        )
 
     async def health(self) -> ProviderHealth:
         if not self.api_key:
@@ -54,11 +117,11 @@ class SubdlProvider:
     def _effective_languages(self) -> str:
         values = [
             item.strip().upper()
-            for item in str(self.languages or "ZH,EN").split(",")
+            for item in str(self.languages or "ZH").split(",")
             if item.strip()
         ]
         if not values:
-            values = ["ZH", "EN"]
+            values = ["ZH"]
         if not self.include_traditional:
             values = [item for item in values if item != "ZH_BG"]
         elif "ZH_BG" not in values:
@@ -112,7 +175,7 @@ class SubdlProvider:
                 },
             )
             if response.status_code == 429:
-                raise CollectorError("SubDL rate limit", ErrorType.RATE_LIMITED, self.id)
+                self._raise_for_429(response, operation="search")
             response.raise_for_status()
             payload = response.json()
         if isinstance(payload, dict) and payload.get("status") is False:
@@ -240,6 +303,16 @@ class SubdlProvider:
         download_url = candidate.download_url or self._download_url(self._download_path(candidate.raw))
         if not download_url:
             raise CollectorError("SubDL did not return a download URL", ErrorType.DOWNLOAD_FAILED, self.id)
+        # 下载鉴权：官方文档支持 api_key query 或 x-api-key，计入账号下载配额
+        headers = {
+            "Accept": "application/zip,application/octet-stream,text/plain,*/*",
+            "User-Agent": "subtitleInfoCollection/0.1",
+            "Referer": candidate.detail_url or "https://subdl.com/",
+        }
+        params: dict[str, str] = {}
+        if self.api_key:
+            params["api_key"] = self.api_key
+            headers["x-api-key"] = self.api_key
         async with httpx.AsyncClient(
             timeout=self.timeout,
             follow_redirects=True,
@@ -247,14 +320,11 @@ class SubdlProvider:
         ) as client:
             response = await client.get(
                 download_url,
-                headers={
-                    "Accept": "application/zip,application/octet-stream,text/plain,*/*",
-                    "User-Agent": "subtitleInfoCollection/0.1",
-                    "Referer": candidate.detail_url or "https://subdl.com/",
-                },
+                params=params or None,
+                headers=headers,
             )
             if response.status_code == 429:
-                raise CollectorError("SubDL rate limit", ErrorType.RATE_LIMITED, self.id)
+                self._raise_for_429(response, operation="download")
             response.raise_for_status()
         file_name = Path(download_url.split("?", 1)[0]).name or f"{candidate.provider_subtitle_id}.zip"
         return [

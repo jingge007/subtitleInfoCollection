@@ -338,7 +338,8 @@ class MainWindow(FluentWindow):
         hit_layout.setSpacing(0)
         hit_label = StrongBodyLabel(f"{provider_label} 成功采集0条")
         hit_label.setAlignment(Qt.AlignCenter)
-        hit_label.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {text_color};")
+        hit_label.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {text_color};")
+        hit_label.setToolTip("成功采集 0 条")
         hit_layout.addWidget(hit_label)
         return hit_card, hit_label
 
@@ -897,9 +898,9 @@ class MainWindow(FluentWindow):
         self.opensubtitles_check = CheckBox("OpenSubtitles", self)
         provider_checks = {
             "subhd": self.subhd_check,
-            "subdl": self.subdl_check,
-            "assrt": self.assrt_check,
             "opensubtitles": self.opensubtitles_check,
+            "assrt": self.assrt_check,
+            "subdl": self.subdl_check,
         }
         self.provider_checks = provider_checks
         for provider, checkbox in provider_checks.items():
@@ -908,9 +909,9 @@ class MainWindow(FluentWindow):
             checkbox.toggled.connect(self._sync_provider_hit_cards_visibility)
         row2.addWidget(source_label)
         row2.addWidget(self.subhd_check)
-        row2.addWidget(self.subdl_check)
-        row2.addWidget(self.assrt_check)
         row2.addWidget(self.opensubtitles_check)
+        row2.addWidget(self.assrt_check)
+        row2.addWidget(self.subdl_check)
         row2.addStretch(1)
 
         params_layout.addLayout(row1)
@@ -931,9 +932,9 @@ class MainWindow(FluentWindow):
         self.collect_provider_hit_cards: dict[str, QFrame] = {}
         for provider_id, provider_label, bg_color, text_color in [
             ("subhd", "SubHD", PRIMARY_SOFT, PRIMARY),
-            ("subdl", "SubDL", GREEN_SOFT, GREEN),
-            ("assrt", "ASSRT", ORANGE_SOFT, ORANGE),
             ("opensubtitles", "OpenSubtitles", RED_SOFT, RED),
+            ("assrt", "ASSRT", ORANGE_SOFT, ORANGE),
+            ("subdl", "SubDL", GREEN_SOFT, GREEN),
         ]:
             hit_card, hit_label = self._make_provider_hit_card(
                 provider_label=provider_label,
@@ -1721,12 +1722,12 @@ class MainWindow(FluentWindow):
         providers = []
         if self.subhd_check.isChecked():
             providers.append("subhd")
-        if self.subdl_check.isChecked():
-            providers.append("subdl")
-        if self.assrt_check.isChecked():
-            providers.append("assrt")
         if self.opensubtitles_check.isChecked():
             providers.append("opensubtitles")
+        if self.assrt_check.isChecked():
+            providers.append("assrt")
+        if self.subdl_check.isChecked():
+            providers.append("subdl")
         return providers
 
     # ── Collection Flow ───────────────────────────────────────────────
@@ -1960,6 +1961,7 @@ class MainWindow(FluentWindow):
                 "opensubtitles": "OpenSubtitles",
             }.get(provider_id, provider_id)
             label.setText(f"{display} 成功采集0条")
+            label.setToolTip("成功采集 0 条")
 
     # 按字幕源勾选状态显示/隐藏对应命中色块
     def _sync_provider_hit_cards_visibility(self, *_args) -> None:
@@ -1971,7 +1973,7 @@ class MainWindow(FluentWindow):
             visible = checkbox.isChecked() if checkbox is not None else True
             card.setVisible(visible)
 
-    # 按 providerStats.downloadCount 刷新各源命中文案
+    # 按 providerStats 刷新各源成功采集条数
     def _update_collect_provider_hits(self, provider_stats: dict) -> None:
         if not hasattr(self, "collect_provider_hit_labels"):
             return
@@ -1985,9 +1987,14 @@ class MainWindow(FluentWindow):
             entry = provider_stats.get(provider_id) or {}
             if not isinstance(entry, dict):
                 entry = {}
-            count = int(entry.get("downloadCount", 0) or 0)
             display = display_names.get(provider_id, provider_id)
-            label.setText(f"{display} 成功采集{count}条")
+            success = int(entry.get("downloadCount", 0) or 0)
+            label.setText(f"{display} 成功采集{success}条")
+            tip_parts = [f"成功采集 {success} 条"]
+            last_error = str(entry.get("lastError") or "").strip()
+            if last_error:
+                tip_parts.append(f"最近错误：{last_error}")
+            label.setToolTip("；".join(tip_parts))
 
     # 按成功数/电影总数刷新准确率百分比
     def _refresh_collect_accuracy(self, movie_count: int, download_count: int) -> None:

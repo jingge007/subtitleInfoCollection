@@ -95,11 +95,16 @@ def test_evaluate_config_reports_missing_tokens_and_provider_readiness(tmp_path)
     assert result.data_dir_exists is True
     assert result.enabled_provider_count == 3
     assert result.configured_provider_count == 1
-    assert [provider.id for provider in result.providers] == ["subhd", "subdl", "assrt", "opensubtitles"]
+    assert [provider.id for provider in result.providers] == [
+        "subhd",
+        "opensubtitles",
+        "assrt",
+        "subdl",
+    ]
     assert result.providers[0].configured is True
-    assert result.providers[1].configured is False
+    assert result.providers[1].enabled is False
     assert result.providers[2].configured is False
-    assert result.providers[3].enabled is False
+    assert result.providers[3].configured is False
     assert any("TMDb" in warning for warning in result.warnings)
 
 

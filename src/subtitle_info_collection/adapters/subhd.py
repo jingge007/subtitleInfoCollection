@@ -1149,13 +1149,19 @@ class SubhdProvider:
 
         loop = asyncio.get_running_loop()
         hard_fail_streak = 0
-        # 每个域名最多允许一次 Playwright 降级，避免首域失败后备用域无浏览器机会
+        forbidden_streak = 0
+        # 每个域名最多允许一次 Playwright 降级，避免首域失败后备用域丢浏览器机会
         playwright_bases_used: set[str] = set()
 
         for base_url in base_urls_ordered:
             if context.deadline_monotonic is not None and loop.time() >= context.deadline_monotonic:
                 if context.log:
                     context.log("SubHD 下载已达截止时间，停止尝试剩余域名")
+                break
+            # 连续多域 403 时快速放弃，避免空转全部镜像
+            if forbidden_streak >= 2:
+                if context.log:
+                    context.log("SubHD 连续多域返回 403，停止尝试剩余域名")
                 break
             allow_playwright = hard_fail_streak < 2 and base_url not in playwright_bases_used
             if context.log:
@@ -1195,6 +1201,11 @@ class SubhdProvider:
                         playwright_bases_used.add(base_url)
             except Exception as exc:
                 hard_fail_streak += 1
+                exc_text = str(exc)
+                if "403" in exc_text or "Forbidden" in exc_text:
+                    forbidden_streak += 1
+                else:
+                    forbidden_streak = 0
                 logger.info(
                     "SubHD download failed: base=%s, id=%s, exc=%s",
                     base_url, candidate.provider_subtitle_id, exc,

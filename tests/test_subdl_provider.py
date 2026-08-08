@@ -1,9 +1,11 @@
+import httpx
 import pytest
 
+from subtitle_info_collection.adapters.base import DownloadContext
 from subtitle_info_collection.adapters.subdl import SubdlProvider
 from subtitle_info_collection.engines.subtitle_engine import validate_candidate_metadata
-from subtitle_info_collection.errors import ErrorType
-from subtitle_info_collection.models import MovieInfo
+from subtitle_info_collection.errors import CollectorError, ErrorType
+from subtitle_info_collection.models import MovieInfo, SubtitleCandidate
 
 
 def movie() -> MovieInfo:
@@ -25,13 +27,13 @@ async def test_health_requires_api_key():
     assert health.error_type == ErrorType.PROVIDER_DISABLED
 
 
-def test_default_search_params_use_zh_en_and_tmdb_id():
+def test_default_search_params_use_zh_and_tmdb_id():
     provider = SubdlProvider(api_key="key")
 
     params = provider._search_params(movie())
 
     assert params["tmdb_id"] == 27205
-    assert params["languages"] == "ZH,EN"
+    assert params["languages"] == "ZH"
     assert params["type"] == "movie"
     assert params["subs_per_page"] == 30
     assert "film_name" not in params
@@ -80,3 +82,60 @@ def test_map_item_bilingual_marker_can_enter_existing_validation():
     )
 
     assert validate_candidate_metadata(candidate).valid is True
+
+
+@pytest.mark.asyncio
+async def test_download_429_daily_limit_is_quota_exceeded(monkeypatch):
+    provider = SubdlProvider(api_key="key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("api_key") == "key"
+        assert request.headers.get("x-api-key") == "key"
+        return httpx.Response(
+            429,
+            json={"error": "daily_limit", "message": "Daily download limit exceeded"},
+        )
+
+    candidate = SubtitleCandidate(
+        provider="subdl",
+        provider_subtitle_id="3197651-3213944",
+        movie_id="tmdb-27205",
+        movie_title="Inception",
+        subtitle_title="demo",
+        download_url="https://dl.subdl.com/subtitle/3197651-3213944.zip",
+    )
+    real_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs = dict(kwargs)
+        kwargs["transport"] = httpx.MockTransport(handler)
+        kwargs.pop("proxy", None)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+    with pytest.raises(CollectorError) as exc_info:
+        await provider.download(candidate, DownloadContext())
+    assert exc_info.value.error_type == ErrorType.DOWNLOAD_QUOTA_EXCEEDED
+    assert "每日下载额度" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_search_429_rate_limit(monkeypatch):
+    provider = SubdlProvider(api_key="key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": "rate_limit", "message": "slow down"})
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs = dict(kwargs)
+        kwargs["transport"] = httpx.MockTransport(handler)
+        kwargs.pop("proxy", None)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+    with pytest.raises(CollectorError) as exc_info:
+        await provider.search(movie())
+    assert exc_info.value.error_type == ErrorType.RATE_LIMITED
+    assert "频率" in str(exc_info.value)
