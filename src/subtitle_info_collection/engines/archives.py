@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import sys
 import tempfile
@@ -174,8 +175,9 @@ def _is_archive_payload(payload: DownloadedPayload) -> bool:
 
 
 def _score_extracted_name(path: Path, candidate: SubtitleCandidate) -> float:
-    """为提取的文件名评分"""
-    text = normalize_text(path.name)
+    """为提取的文件名评分：双语文件优先，纯英/仅繁靠后"""
+    name = path.name
+    text = normalize_text(name)
     score = 0.0
     for value, weight in [
         (candidate.movie_title_zh, 80),
@@ -187,6 +189,21 @@ def _score_extracted_name(path: Path, candidate: SubtitleCandidate) -> float:
             score += weight
     if path.suffix.lower().lstrip(".") == candidate.subtitle_format:
         score += 8
+    bilingual_re = re.compile(
+        r"(简体\s*[&+_]\s*英文|简繁英|chs\s*[&_.-]\s*eng|eng\s*[&_.-]\s*chs|"
+        r"chs_eng|zh[-_.]?en|中英|简英)",
+        re.I,
+    )
+    if bilingual_re.search(name):
+        score += 200.0
+    elif re.search(r"(^|[._\s-])(eng|english|英文)([._\s-]|$)", name, re.I) and not re.search(
+        r"简|chs|zh|中文|双语", name, re.I
+    ):
+        score -= 120.0
+    elif re.search(r"(繁体|cht|traditional)", name, re.I) and not re.search(
+        r"简|chs|双语|eng|英文", name, re.I
+    ):
+        score -= 80.0
     return score
 
 

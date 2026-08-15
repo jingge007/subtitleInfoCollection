@@ -12,7 +12,7 @@ except ImportError:  # pragma: no cover
     load_dotenv = None
 
 
-DEFAULT_PROVIDER_PRIORITY = ["subhd", "opensubtitles", "assrt", "subdl"]
+DEFAULT_PROVIDER_PRIORITY = ["subhd", "assrt", "opensubtitles", "subdl"]
 DEFAULT_REQUEST_INTERVAL_MS = 8_000
 DEFAULT_MOVIE_CONCURRENCY = 2
 DEFAULT_MIN_BILINGUAL_RATIO = 0.70
@@ -247,7 +247,9 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
     ),
     EnvFieldMeta(
         "SUBTITLE_PROVIDER_PRIORITY", "字幕源优先级", CONFIG_GROUP_STRATEGY, "text",
-        "逗号分隔：subhd,opensubtitles,assrt,subdl；越靠前越优先。", "provider_priority",
+        "逗号分隔：subhd,assrt,opensubtitles,subdl；越靠前越优先。"
+        "仅列出的源会出现在采集页勾选框中，未列出的源隐藏且不参与采集。",
+        "provider_priority",
     ),
     EnvFieldMeta(
         "SUBTITLE_PROVIDER_DISABLED", "禁用字幕源", CONFIG_GROUP_STRATEGY, "text",
@@ -307,7 +309,11 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
     ),
     EnvFieldMeta(
         "ASSRT_API_BASE_URL", "ASSRT API 地址", CONFIG_GROUP_NETWORK, "text",
-        "默认 api.assrt.net；网络不通时可改 api.makedie.me（程序也会自动回退）。", "assrt_api_base_url",
+        "默认 api.assrt.net；不通时可改 api.makedie.me；仅搜索兜底用，HTTPS/5xx 会切备用 HTTP。", "assrt_api_base_url",
+    ),
+    EnvFieldMeta(
+        "ASSRT_SITE_BASE_URL", "ASSRT 站点地址", CONFIG_GROUP_NETWORK, "text",
+        "网页搜索/下载基址，默认 https://2.assrt.net；下载走详情页「下载字幕」链接。", "assrt_site_base_url",
     ),
     EnvFieldMeta(
         "SUBDL_BASE_URL", "SubDL 搜索地址", CONFIG_GROUP_NETWORK, "text",
@@ -521,6 +527,7 @@ class AppSettings:
     tmdb_token: str = ""
     assrt_token: str = ""
     assrt_api_base_url: str = "https://api.assrt.net/v1"
+    assrt_site_base_url: str = "https://2.assrt.net"
     opensubtitles_api_key: str = ""
     opensubtitles_username: str = ""
     opensubtitles_password: str = ""
@@ -548,6 +555,7 @@ class AppSettings:
             tmdb_token=os.getenv("TMDB_TOKEN", ""),
             assrt_token=os.getenv("ASSRT_TOKEN", ""),
             assrt_api_base_url=os.getenv("ASSRT_API_BASE_URL", "https://api.assrt.net/v1"),
+            assrt_site_base_url=os.getenv("ASSRT_SITE_BASE_URL", "https://2.assrt.net"),
             subdl_api_key=os.getenv("SUBDL_API_KEY", ""),
             subdl_base_url=os.getenv("SUBDL_BASE_URL", "https://api.subdl.com/api/v1"),
             subdl_download_base_url=os.getenv("SUBDL_DOWNLOAD_BASE_URL", "https://dl.subdl.com"),
@@ -624,6 +632,7 @@ class AppSettings:
             "TMDB_TOKEN": self.tmdb_token,
             "ASSRT_TOKEN": self.assrt_token,
             "ASSRT_API_BASE_URL": self.assrt_api_base_url,
+            "ASSRT_SITE_BASE_URL": self.assrt_site_base_url,
             "SUBDL_API_KEY": self.subdl_api_key,
             "SUBDL_BASE_URL": self.subdl_base_url,
             "SUBDL_DOWNLOAD_BASE_URL": self.subdl_download_base_url,

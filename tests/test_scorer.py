@@ -173,6 +173,28 @@ def test_identity_accepts_matching_bilingual_same_year():
     assert scored.scores["yearScore"] == 100
 
 
+def test_identity_rejects_up_in_the_air_for_up():
+    movie = MovieInfo(
+        movie_id="tmdb-14160",
+        title="Up",
+        original_title="Up",
+        title_zh="飞屋环游记",
+        year=2009,
+    )
+    wrong = candidate(
+        "air",
+        "在云端 Up.In.The.Air.2009.Blu-Ray.chs&eng",
+        50,
+    )
+    assert not has_movie_identity_match(wrong, movie)
+    right = candidate(
+        "up",
+        "飞屋环游记 Up.2009.BluRay.1080p.chs&eng",
+        80,
+    )
+    assert has_movie_identity_match(right, movie)
+
+
 def test_build_movie_search_keywords_includes_year():
     movie = MovieInfo(
         movie_id="tmdb-1",
@@ -185,3 +207,48 @@ def test_build_movie_search_keywords_includes_year():
     assert "恋恋笔记本" in keywords
     assert "恋恋笔记本 2004" in keywords
     assert "The Notebook 2004" in keywords
+
+
+def test_score_prefers_bilingual_marker_over_high_downloads():
+    movie = MovieInfo(
+        movie_id="tmdb-1",
+        title="Example Movie",
+        original_title="Example Movie",
+        title_zh="示例电影",
+        year=2026,
+        rating=8.5,
+    )
+    popular_empty = score_candidate(
+        SubtitleCandidate(
+            provider="assrt",
+            provider_subtitle_id="old",
+            movie_id="tmdb-1",
+            movie_title="Example Movie",
+            movie_year=2026,
+            subtitle_title="示例电影 Example Movie 2026",
+            language_type="",
+            subtitle_format="srt",
+            download_count=2473,
+            file_names=["Example.Movie.2026.srt"],
+        ),
+        movie,
+    )
+    bilingual = score_candidate(
+        SubtitleCandidate(
+            provider="assrt",
+            provider_subtitle_id="new",
+            movie_id="tmdb-1",
+            movie_title="Example Movie",
+            movie_year=2026,
+            subtitle_title="示例电影 Example Movie 2026",
+            language_type="中英双语",
+            subtitle_format="srt",
+            download_count=7,
+            file_names=["Example.Movie.2026.chs_eng.srt"],
+        ),
+        movie,
+    )
+    ranked = sort_candidates([popular_empty, bilingual])
+    assert ranked[0].provider_subtitle_id == "new"
+    assert bilingual.scores["bilingualScore"] >= 150
+    assert popular_empty.scores["bilingualScore"] == 0

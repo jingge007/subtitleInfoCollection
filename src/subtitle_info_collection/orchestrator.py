@@ -210,6 +210,7 @@ def create_provider_registry(config: TaskConfig) -> dict[str, ProviderAdapter]:
         "assrt": AssrtProvider(
             token=config.assrt_token,
             base_url=config.assrt_api_base_url,
+            site_base_url=config.assrt_site_base_url,
             request_interval_ms=ASSRT_INTERNAL_INTERVAL_MS,
             proxy=proxy_url,
         ),

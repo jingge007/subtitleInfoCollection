@@ -44,6 +44,7 @@ copy .env.example .env
 TMDB_TOKEN=
 ASSRT_TOKEN=
 ASSRT_API_BASE_URL=https://api.assrt.net/v1
+ASSRT_SITE_BASE_URL=https://2.assrt.net
 SUBDL_API_KEY=
 SUBDL_BASE_URL=https://api.subdl.com/api/v1
 SUBDL_DOWNLOAD_BASE_URL=https://dl.subdl.com
@@ -64,7 +65,7 @@ BAIDU_TRANSLATE_APP_ID=
 BAIDU_TRANSLATE_SECRET=
 
 # 采集策略与 SubHD
-SUBTITLE_PROVIDER_PRIORITY=subhd,opensubtitles,assrt,subdl
+SUBTITLE_PROVIDER_PRIORITY=subhd,assrt,opensubtitles,subdl
 SUBTITLE_PROVIDER_DISABLED=
 SUBTITLE_REQUEST_INTERVAL_MS=8000
 SUBTITLE_MOVIE_CONCURRENCY=2
@@ -89,7 +90,8 @@ HTTPS_PROXY=
 
 - `TMDB_TOKEN`：TMDb Bearer Token，用于指定年份电影榜单采集，也用于本地字幕解析匹配电影信息；留空则电影榜单采集不可用。
 - `ASSRT_TOKEN`：ASSRT API 令牌；填写后启用 ASSRT 搜索和下载，留空判定为未配置。
-- `ASSRT_API_BASE_URL`：ASSRT API 基础地址；默认 `https://api.assrt.net/v1`。主域不通时可改为官方备用 `https://api.makedie.me/v1`（程序连接失败时也会自动尝试备用域）。
+- `ASSRT_API_BASE_URL`：ASSRT API 基础地址；默认 `https://api.assrt.net/v1`。仅网页搜索失败时作搜索兜底；主域不通可改为 `https://api.makedie.me/v1`。程序会自动 failover（备用域 HTTPS → HTTP，且备用域 HTTP 优先于主域 HTTP）；HTTPS 证书主机名不匹配或连接失败会快切，HTTP 5xx（如 503）会继续试下一候选。当前环境下 `http://api.makedie.me/v1` 常为 API 可用兜底。ASSRT API 按 5 次/分钟限速。
+- `ASSRT_SITE_BASE_URL`：ASSRT 网页站点基础地址；默认 `https://2.assrt.net`。搜索与下载主路径走站点详情页「下载字幕」链接；不通时可改 `https://assrt.net`。
 - `SUBDL_API_KEY`：SubDL 官方 API 密钥；填写后启用 SubDL，留空判定为未配置。
 - `SUBDL_BASE_URL` / `SUBDL_DOWNLOAD_BASE_URL`：SubDL 搜索与下载基础地址；通常保持默认。
 - `SUBDL_LANGUAGES`：SubDL 搜索语言，逗号分隔；默认 `ZH` 以减少纯英候选空转，最终仍以下载后中英双语校验为准。
@@ -100,7 +102,7 @@ HTTPS_PROXY=
 - `TODAYS_LINES_USERNAME` / `TODAYS_LINES_PASSWORD`：33 台词自动化登录账号密码；仅自动化功能使用，本地 token 不可用时才用密码登录。
 - `TODAYS_LINES_TOKEN` / `TODAYS_LINES_TOKEN_TIME`：登录成功后由程序自动写入的缓存 token 与时间戳；手工可留空。
 - `BAIDU_TRANSLATE_APP_ID` / `BAIDU_TRANSLATE_SECRET`：百度翻译开放平台凭证，用于自动化脚本补全英文字幕（唯一翻译通道）；留空则跳过英文补全。
-- `SUBTITLE_PROVIDER_PRIORITY`：字幕源搜索优先级，逗号分隔，支持 `subhd`、`opensubtitles`、`assrt`、`subdl`，越靠前越优先。
+- `SUBTITLE_PROVIDER_PRIORITY`：字幕源启用列表与搜索优先级，逗号分隔，支持 `subhd`、`assrt`、`opensubtitles`、`subdl`，越靠前越优先。仅列出的源会出现在采集页勾选框；未列出的源隐藏且不参与采集。
 - `SUBTITLE_PROVIDER_DISABLED`：禁用的字幕源，逗号分隔；留空表示不额外禁用。
 - `SUBTITLE_REQUEST_INTERVAL_MS`：字幕源请求间隔（毫秒），降低限流/验证码概率；过低值会被程序限制到安全下限（不低于 8000）。SubHD 若频繁验证码可在本地调高到 12000～15000。
 - `SUBTITLE_MOVIE_CONCURRENCY`：同时处理的电影数（1～4）；默认 `2` 为有限并发，`1` 为串行（旧行为）。

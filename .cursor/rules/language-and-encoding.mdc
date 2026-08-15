@@ -7,7 +7,8 @@ alwaysApply: true
 
 - 所有回复、分析、计划、进度、总结必须使用简体中文。
 - 代码标识符、命令、路径、环境变量名保持原文。
-- 本仓库所有文本文件使用 UTF-8（无 BOM）。
+- 本仓库文本文件默认使用 UTF-8（无 BOM）。
+- 例外：`scripts/*.ps1` 等 PowerShell 脚本必须使用 UTF-8 with BOM（否则 Windows PowerShell 5.1 会按系统 ANSI/GBK 误读中文并触发 ParserError）。
 - 读写文本必须显式 `encoding="utf-8"`，禁止依赖系统默认编码。
 - JSON 含中文时使用 `ensure_ascii=False`。
 - 字幕解码复用 `engines/subtitle_engine.py`，禁止各处自行猜编码。

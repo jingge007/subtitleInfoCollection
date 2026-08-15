@@ -7,6 +7,7 @@
 - 所有回复、分析、计划、进度说明、总结必须使用**简体中文**。
 - 代码标识符、命令、文件路径、环境变量名保持原文，不做翻译。
 - 项目文本文件（源码、配置、文档、规则）必须使用 **UTF-8**（无 BOM）。
+- **例外**：`scripts/*.ps1` 等 PowerShell 脚本必须使用 **UTF-8 with BOM**。Windows PowerShell 5.1 在无 BOM 时会按系统 ANSI（中文环境多为 GBK）解析，含中文的脚本会出现引号错位与 `ParserError`。
 - 读写文本文件必须显式指定 `encoding="utf-8"`，禁止依赖系统默认编码。
 - 导出含中文的 JSON 时使用 `ensure_ascii=False`。
 - 字幕内容解码复用 `engines/subtitle_engine.py` 的多编码逻辑，禁止在各 adapter 内自行猜测编码。

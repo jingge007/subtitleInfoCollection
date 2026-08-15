@@ -214,6 +214,24 @@ def _is_short_chinese_title(movie: MovieInfo) -> bool:
     return bool(title_zh) and len(title_zh) <= 2
 
 
+_GENERIC_SHORT_ENGLISH_TITLES = frozenset(
+    {"up", "it", "her", "us", "one", "two", "big", "war", "elf", "ray", "bob", "max"}
+)
+
+
+# 过短/泛化英文原标题：禁止单 token 英文兜底（避免 Up 命中 Up in the Air）
+def _is_generic_short_english_title(movie: MovieInfo) -> bool:
+    original = (movie.original_title or movie.title or "").strip()
+    if not original:
+        return False
+    if any("\u4e00" <= ch <= "\u9fff" for ch in original):
+        return False
+    folded = original.casefold()
+    if folded in _GENERIC_SHORT_ENGLISH_TITLES:
+        return True
+    return len(original) <= 3
+
+
 def get_resolution_score(text: str = "") -> float:
     value = text.lower()
     if re.search(r"2160p|4k|uhd", value):
@@ -281,15 +299,29 @@ def has_movie_identity_match(candidate: SubtitleCandidate, movie: MovieInfo) -> 
         return True
 
     target_tokens = _tokens(identity)
+    short_english = _is_generic_short_english_title(movie)
+    # 短英文原标题时优先/仅用中文名做序列匹配，避免 Up ⊆ Up in the Air
+    title_candidates = [movie.title_zh, movie.title, movie.original_title]
+    if short_english:
+        title_candidates = [movie.title_zh]
+        if (
+            movie.title
+            and normalize_text(movie.title) != normalize_text(movie.original_title or "")
+            and len((movie.title or "").strip()) > 3
+        ):
+            title_candidates.append(movie.title)
     title_hit = any(
         title and _contains_token_sequence(target_tokens, title)
-        for title in [movie.title_zh, movie.title, movie.original_title]
+        for title in title_candidates
+        if title
     )
     if title_hit:
         return True
 
     # 短中文片名：不允许显著词交集兜底（避免「功夫」命中「功夫熊猫」）
     if _is_short_chinese_title(movie):
+        return False
+    if short_english:
         return False
 
     significant_words = _significant_title_tokens(movie.title) | _significant_title_tokens(
@@ -302,8 +334,31 @@ def has_movie_identity_match(candidate: SubtitleCandidate, movie: MovieInfo) -> 
     return len(matched_words) >= required_matches
 
 
+# 明确中英双语标记加分，避免仅靠高下载量的空语言包抢先
+_BILINGUAL_LANGUAGE_RE = re.compile(r"(中英双语|简英|双语)")
+_BILINGUAL_FILENAME_RE = re.compile(
+    r"(简体\s*[&+_]\s*英文|简繁英|chs\s*[&_.-]\s*eng|eng\s*[&_.-]\s*chs|chs_eng|zh[-_.]?en|中英|简英)",
+    re.I,
+)
+
+
+def bilingual_meta_score(candidate: SubtitleCandidate) -> float:
+    score = 0.0
+    if _BILINGUAL_LANGUAGE_RE.search(candidate.language_type or ""):
+        score += 150.0
+    blob = " ".join(
+        str(part)
+        for part in [candidate.subtitle_title, *candidate.file_names, candidate.description or ""]
+        if part
+    )
+    if _BILINGUAL_FILENAME_RE.search(blob):
+        score += 40.0
+    return score
+
+
 def score_candidate(candidate: SubtitleCandidate, movie: MovieInfo) -> SubtitleCandidate:
     language_score = 1000.0
+    bilingual_score = bilingual_meta_score(candidate)
     rating_score = float(movie.rating or 0) * 100
     year_score = compute_year_score(candidate, movie)
     download_score = math.log(float(candidate.download_count or 0) + 1) * 15
@@ -313,6 +368,7 @@ def score_candidate(candidate: SubtitleCandidate, movie: MovieInfo) -> SubtitleC
     format_score = get_format_score(candidate.subtitle_format)
     total = (
         language_score
+        + bilingual_score
         + rating_score
         + year_score
         + download_score
@@ -324,6 +380,7 @@ def score_candidate(candidate: SubtitleCandidate, movie: MovieInfo) -> SubtitleC
     candidate.total_score = round(total, 2)
     candidate.scores = {
         "languageScore": language_score,
+        "bilingualScore": bilingual_score,
         "ratingScore": round(rating_score, 2),
         "yearScore": year_score,
         "downloadScore": round(download_score, 2),

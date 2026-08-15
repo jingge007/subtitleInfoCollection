@@ -346,6 +346,7 @@ class TaskConfig:
     tmdb_token: str = ""  # TMDb访问令牌
     assrt_token: str = ""  # ASSRT访问令牌
     assrt_api_base_url: str = "https://api.assrt.net/v1"  # ASSRT API基础URL
+    assrt_site_base_url: str = "https://2.assrt.net"  # ASSRT 网页站点基础URL
     opensubtitles_api_key: str = ""  # OpenSubtitles API密钥
     opensubtitles_username: str = ""  # OpenSubtitles用户名
     opensubtitles_password: str = ""  # OpenSubtitles密码

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QWidget,
 )
-from qfluentwidgets import CaptionLabel, FluentWindow, HeaderCardWidget, SwitchButton
+from qfluentwidgets import CaptionLabel, FluentWindow, HeaderCardWidget, NavigationWidget, SwitchButton
 
 from subtitle_info_collection.gui.config_editor import FullWidthIndicatorSegmentedWidget
 from subtitle_info_collection.gui.main_window import (
@@ -25,6 +25,13 @@ from subtitle_info_collection.gui.main_window import (
     DEFAULT_WINDOW_WIDTH,
     MainWindow,
 )
+
+
+def _header_index(window: MainWindow, title: str, widget) -> int:
+    for card in window.findChildren(HeaderCardWidget):
+        if card.title == title:
+            return card.headerLayout.indexOf(widget)
+    return -1
 
 
 def _app() -> QApplication:
@@ -44,6 +51,9 @@ def test_main_window_uses_fluent_navigation_chrome(monkeypatch):
     assert window.stackedWidget.count() == 9
     assert "QFrame#heroPanel" not in window.styleSheet()
     assert "QLabel#posterBlock" not in window.styleSheet()
+    nav_items = window.navigationInterface.findChildren(NavigationWidget)
+    assert nav_items
+    assert all(item.cursor().shape() == Qt.PointingHandCursor for item in nav_items)
 
     window.close()
     app.quit()
@@ -105,11 +115,22 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     assert window._parse_success_stat_card.toolTip() == "点击打开解析输出目录"
     assert set(window.collect_stat_labels) == {
         "movies",
+        "remaining",
         "failed",
         "downloaded",
         "accuracy",
     }
     assert window.collect_stat_labels["accuracy"].text() == "0%"
+    assert window.collect_stat_labels["remaining"].text() == "0"
+    assert bool(
+        window.collect_provider_hit_labels["subhd"].textInteractionFlags()
+        & Qt.TextSelectableByMouse
+    )
+    assert bool(window.collect_status.textInteractionFlags() & Qt.TextSelectableByMouse)
+    assert bool(
+        window.collect_elapsed_label.textInteractionFlags() & Qt.TextSelectableByMouse
+    )
+    assert window.collect_elapsed_label.text() == "耗时 00:00:00"
     assert set(window.collect_provider_hit_labels) == {
         "subhd",
         "subdl",
@@ -163,6 +184,34 @@ def test_main_window_exposes_professional_ops_layout_objects(monkeypatch):
     assert window._collect_success_stat_card.toolTip() == "点击打开采集输出目录"
     assert set(window.automation_stat_labels) == {"total", "pages"}
     assert set(window.classic_stat_labels) == {"movies", "lines", "pages"}
+    assert window.copy_collect_log_button.toolTip() == "复制日志"
+    assert window.download_collect_log_button.toolTip() == "下载日志"
+    copy_index = _header_index(window, "采集日志", window.copy_collect_log_button)
+    download_index = _header_index(window, "采集日志", window.download_collect_log_button)
+    assert 0 <= copy_index < download_index
+    assert window.pin_button.toolTip() == "窗口置顶"
+    assert window.pin_button.cursor().shape() == Qt.PointingHandCursor
+    pin_index = window.titleBar.buttonLayout.indexOf(window.pin_button)
+    min_index = window.titleBar.buttonLayout.indexOf(window.titleBar.minBtn)
+    assert 0 <= pin_index < min_index
+    assert window._window_pinned is False
+
+    window.pin_button.setChecked(True)
+    window._toggle_always_on_top()
+    assert window.pin_button.toolTip() == "取消置顶"
+    assert window._window_pinned is True
+    handle = window.windowHandle()
+    if handle is not None:
+        assert bool(handle.flags() & Qt.WindowStaysOnTopHint)
+
+    window.pin_button.setChecked(False)
+    window._toggle_always_on_top()
+    assert window.pin_button.toolTip() == "窗口置顶"
+    assert window._window_pinned is False
+    handle = window.windowHandle()
+    if handle is not None:
+        assert not bool(handle.flags() & Qt.WindowStaysOnTopHint)
+
     assert window.start_button.cursor().shape() == Qt.PointingHandCursor
     assert window.history_table.columnCount() == 5
     assert not hasattr(window, "latest_records_layout")
@@ -351,7 +400,7 @@ def test_package_dist_dir_env_setting_is_documented_and_used():
     assert "推荐填写最终目录" in env_example
     assert "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR" in build_script
     assert "--distpath" in build_script
-    assert "--specpath" in build_script
+    assert "字幕采集工具.spec" in build_script
     assert "PLAYWRIGHT_BROWSERS_PATH" in build_script
     assert "ms-playwright" in build_script
     assert "playwrightBrowserSourcePath" in build_script
@@ -401,6 +450,7 @@ def test_collect_stats_accuracy_and_download_dir(monkeypatch, tmp_path):
     )
 
     assert window.collect_stat_labels["movies"].text() == "30"
+    assert window.collect_stat_labels["remaining"].text() == "11"
     assert window.collect_stat_labels["failed"].text() == "3"
     assert window.collect_stat_labels["downloaded"].text() == "16"
     assert window.collect_stat_labels["accuracy"].text() == "53%"
@@ -414,7 +464,103 @@ def test_collect_stats_accuracy_and_download_dir(monkeypatch, tmp_path):
             "downloadDir": str(download_dir),
         }
     )
+    assert window.collect_stat_labels["remaining"].text() == "0"
     assert window.collect_stat_labels["accuracy"].text() == "86%"
+
+    window.close()
+    app.quit()
+
+
+def test_download_collect_log_writes_utf8_txt(monkeypatch, tmp_path):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = _app()
+    window = MainWindow()
+    window.collect_log.setPlainText("第一行\nASSRT 搜索成功")
+    target = tmp_path / "采集日志.txt"
+
+    monkeypatch.setattr(
+        "subtitle_info_collection.gui.main_window.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(target), "文本文件 (*.txt)"),
+    )
+    window.download_collect_log()
+    assert target.read_text(encoding="utf-8") == "第一行\nASSRT 搜索成功"
+
+    window.close()
+    app.quit()
+
+
+def _layout_widgets(layout: QHBoxLayout) -> list[QWidget]:
+    widgets: list[QWidget] = []
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        widget = item.widget() if item is not None else None
+        if widget is not None:
+            widgets.append(widget)
+    return widgets
+
+
+def test_provider_ui_order_follows_priority(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = _app()
+    window = MainWindow()
+
+    for checkbox in window.provider_checks.values():
+        checkbox.setChecked(True)
+
+    ordered = window._ordered_provider_ids()
+    assert ordered == [
+        pid for pid in window.settings.provider_priority if pid in window.provider_checks
+    ]
+    assert window.selected_providers() == ordered
+
+    check_widgets = [
+        widget
+        for widget in _layout_widgets(window._provider_checks_layout)
+        if widget in window.provider_checks.values()
+    ]
+    assert check_widgets == [window.provider_checks[pid] for pid in ordered]
+
+    hit_widgets = _layout_widgets(window._provider_hits_layout)
+    assert hit_widgets == [window.collect_provider_hit_cards[pid] for pid in ordered]
+
+    custom = ["subdl", "assrt", "subhd", "opensubtitles"]
+    window.settings.provider_priority = list(custom)
+    window._sync_provider_ui_order()
+    assert window._ordered_provider_ids() == custom
+    assert window.selected_providers() == custom
+    assert [
+        widget
+        for widget in _layout_widgets(window._provider_checks_layout)
+        if widget in window.provider_checks.values()
+    ] == [window.provider_checks[pid] for pid in custom]
+    assert _layout_widgets(window._provider_hits_layout) == [
+        window.collect_provider_hit_cards[pid] for pid in custom
+    ]
+
+    # 未列入 PRIORITY 的源应隐藏且不参与 selected_providers
+    partial = ["subhd", "opensubtitles", "subdl"]
+    window.settings.provider_priority = list(partial)
+    for checkbox in window.provider_checks.values():
+        checkbox.setChecked(False)
+    window._sync_provider_ui_order()
+    assert window._ordered_provider_ids() == partial
+    assert window.assrt_check.isHidden()
+    assert not window.assrt_check.isChecked()
+    assert window.collect_provider_hit_cards["assrt"].isHidden()
+    # 保存/同步后 PRIORITY 内的源默认勾选
+    assert all(window.provider_checks[pid].isChecked() for pid in partial)
+    assert window.selected_providers() == partial
+    assert [
+        widget
+        for widget in _layout_widgets(window._provider_checks_layout)
+        if widget in window.provider_checks.values()
+    ] == [window.provider_checks[pid] for pid in partial]
+
+    # DISABLED 中的源保持不勾选
+    window.settings.provider_disabled = ["subdl"]
+    window._sync_provider_ui_order()
+    assert window.selected_providers() == ["subhd", "opensubtitles"]
+    assert not window.subdl_check.isChecked()
 
     window.close()
     app.quit()

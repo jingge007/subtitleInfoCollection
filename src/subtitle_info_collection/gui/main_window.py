@@ -11,7 +11,7 @@ from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import Qt, QStandardPaths, QTimer, QUrl, Signal
 from PySide6.QtGui import QPainter, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -47,6 +47,7 @@ from qfluentwidgets import (
     InfoBarPosition,
     LineEdit,
     NavigationItemPosition,
+    NavigationWidget,
     PrimaryPushButton,
     ProgressRing,
     PushButton,
@@ -61,7 +62,14 @@ from qfluentwidgets import (
     Theme,
 )
 
-from ..config import AppSettings, bootstrap_env_file, evaluate_config, upsert_env_values
+from ..config import (
+    DEFAULT_PROVIDER_PRIORITY,
+    PROVIDER_LABELS,
+    AppSettings,
+    bootstrap_env_file,
+    evaluate_config,
+    upsert_env_values,
+)
 from ..engines.subtitle_engine import MIN_VALID_SUBTITLE_BYTES
 from ..models import TaskConfig
 from ..storage import AppStorage
@@ -100,6 +108,13 @@ PAGE_MARGINS = (18, 8, 18, 8)
 PAGE_SPACING = 8
 CARD_VIEW_MARGINS = (14, 6, 14, 10)
 CARD_HEADER_MARGINS = (14, 8, 14, 0)
+# 字幕源命中色块配色（顺序由 SUBTITLE_PROVIDER_PRIORITY 决定）
+PROVIDER_HIT_COLORS = {
+    "subhd": (PRIMARY_SOFT, PRIMARY),
+    "opensubtitles": (RED_SOFT, RED),
+    "assrt": (ORANGE_SOFT, ORANGE),
+    "subdl": (GREEN_SOFT, GREEN),
+}
 
 
 def _play_captcha_alert() -> None:
@@ -234,6 +249,7 @@ class MainWindow(FluentWindow):
         # 启动时默认展开侧边栏（否则宽窗口下仍保持收起态）
         self.navigationInterface.expand(useAni=False)
         self._apply_pointing_hand_cursors()
+        self._setup_window_pin()
         self.refresh_history()
         self.refresh_task_center()
 
@@ -274,6 +290,10 @@ class MainWindow(FluentWindow):
         layout.setSpacing(PAGE_SPACING)
         return layout
 
+    # 展示文案允许鼠标拖选后 Ctrl+C 复制
+    def _enable_copyable_label(self, label: QLabel) -> None:
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
     # 构建任务状态统计卡；可点时用手型光标并绑定点击回调
     def _make_stat_card(
         self,
@@ -309,14 +329,88 @@ class MainWindow(FluentWindow):
         value_label = QLabel(initial_text)
         value_label.setAlignment(Qt.AlignCenter)
         value_label.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
-        value_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         caption_label = QLabel(caption)
         caption_label.setAlignment(Qt.AlignCenter)
         caption_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 11px;")
-        caption_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        if clickable:
+            # 可点卡保持子控件穿透，避免拖选抢走「打开目录」点击
+            value_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            caption_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        else:
+            self._enable_copyable_label(value_label)
+            self._enable_copyable_label(caption_label)
         stat_layout.addWidget(value_label)
         stat_layout.addWidget(caption_label)
         return stat_card, value_label
+
+    # 采集页展示的字幕源：仅 PRIORITY 中列出的已知源（不自动补齐未列出的源）
+    def _ordered_provider_ids(self) -> list[str]:
+        ordered: list[str] = []
+        for provider_id in self.settings.provider_priority:
+            if provider_id in PROVIDER_LABELS and provider_id not in ordered:
+                ordered.append(provider_id)
+        if not ordered:
+            return list(DEFAULT_PROVIDER_PRIORITY)
+        return ordered
+
+    # 按优先级重排「字幕源」勾选框；未列入 PRIORITY 的源隐藏且取消勾选
+    def _layout_provider_checks(self) -> None:
+        layout = getattr(self, "_provider_checks_layout", None)
+        if layout is None or not hasattr(self, "provider_checks"):
+            return
+        while layout.count():
+            layout.takeAt(0)
+        layout.addWidget(self._provider_source_label)
+        visible_ids = self._ordered_provider_ids()
+        visible_set = set(visible_ids)
+        for provider_id in visible_ids:
+            checkbox = self.provider_checks.get(provider_id)
+            if checkbox is None:
+                continue
+            checkbox.setVisible(True)
+            layout.addWidget(checkbox)
+        for provider_id, checkbox in self.provider_checks.items():
+            if provider_id in visible_set:
+                continue
+            checkbox.setChecked(False)
+            checkbox.setVisible(False)
+        layout.addStretch(1)
+
+    # PRIORITY 中列出的源默认勾选参与采集（DISABLED 除外）
+    def _apply_default_provider_checks(self) -> None:
+        if not hasattr(self, "provider_checks"):
+            return
+        disabled = set(self.settings.provider_disabled)
+        visible = set(self._ordered_provider_ids())
+        for provider_id, checkbox in self.provider_checks.items():
+            if provider_id in visible:
+                checkbox.setChecked(provider_id not in disabled)
+            else:
+                checkbox.setChecked(False)
+
+    # 按优先级重排命中色块；未列入 PRIORITY 的源不占布局并隐藏
+    def _layout_provider_hit_cards(self) -> None:
+        layout = getattr(self, "_provider_hits_layout", None)
+        if layout is None or not hasattr(self, "collect_provider_hit_cards"):
+            return
+        while layout.count():
+            layout.takeAt(0)
+        visible_ids = self._ordered_provider_ids()
+        visible_set = set(visible_ids)
+        for provider_id in visible_ids:
+            card = self.collect_provider_hit_cards.get(provider_id)
+            if card is not None:
+                layout.addWidget(card, 1)
+        for provider_id, card in self.collect_provider_hit_cards.items():
+            if provider_id not in visible_set:
+                card.setVisible(False)
+
+    # 配置变更后按最新优先级重排，并默认勾选已启用源
+    def _sync_provider_ui_order(self) -> None:
+        self._layout_provider_checks()
+        self._apply_default_provider_checks()
+        self._layout_provider_hit_cards()
+        self._sync_provider_hit_cards_visibility()
 
     # 构建字幕源采集命中色块（横排区分不同源）
     def _make_provider_hit_card(
@@ -340,15 +434,19 @@ class MainWindow(FluentWindow):
         hit_label.setAlignment(Qt.AlignCenter)
         hit_label.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {text_color};")
         hit_label.setToolTip("成功采集 0 条")
+        self._enable_copyable_label(hit_label)
         hit_layout.addWidget(hit_label)
         return hit_card, hit_label
 
-    # 为全窗口可点击控件统一设置手型光标
+    # 为全窗口可点击控件统一设置手型光标（含侧边栏导航项）
     def _apply_pointing_hand_cursors(self) -> None:
         for button in self.findChildren(QAbstractButton):
             button.setCursor(Qt.PointingHandCursor)
         for card in self.findChildren(ClickableStatCard):
             card.setCursor(Qt.PointingHandCursor)
+        # NavigationWidget 非 QAbstractButton，需单独设置侧边栏菜单手型
+        for nav_item in self.navigationInterface.findChildren(NavigationWidget):
+            nav_item.setCursor(Qt.PointingHandCursor)
 
     def _scroll_page(self, object_name: str) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
         scroll_area = QScrollArea(self)
@@ -780,6 +878,7 @@ class MainWindow(FluentWindow):
         self.config_check = evaluate_config(self.settings, env_path)
         self.storage = AppStorage(self.settings.database_path)
         self.config_editor.load_from_settings(self.settings)
+        self._sync_provider_ui_order()
         self.refresh_history()
         self.refresh_task_center()
         InfoBar.success(
@@ -887,11 +986,16 @@ class MainWindow(FluentWindow):
         row1.addWidget(limit_label)
         row1.addWidget(self.limit_spin)
         row1.addStretch(1)
+        self.collect_elapsed_label = StrongBodyLabel("耗时 00:00:00")
+        self.collect_elapsed_label.setStyleSheet(f"font-size: 14px; color: {TEXT_SOFT};")
+        self.collect_elapsed_label.setMinimumWidth(120)
+        self.collect_elapsed_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._enable_copyable_label(self.collect_elapsed_label)
+        row1.addWidget(self.collect_elapsed_label, 0, Qt.AlignRight | Qt.AlignVCenter)
 
         row2 = QHBoxLayout()
         row2.setSpacing(12)
         source_label = StrongBodyLabel("字幕源")
-        disabled_providers = set(self.settings.provider_disabled)
         self.subhd_check = CheckBox("SubHD", self)
         self.subdl_check = CheckBox("SubDL", self)
         self.assrt_check = CheckBox("ASSRT", self)
@@ -903,16 +1007,13 @@ class MainWindow(FluentWindow):
             "subdl": self.subdl_check,
         }
         self.provider_checks = provider_checks
-        for provider, checkbox in provider_checks.items():
-            checkbox.setChecked(provider not in disabled_providers)
+        self._provider_checks_layout = row2
+        self._provider_source_label = source_label
+        for _provider, checkbox in provider_checks.items():
             # 勾选变化时同步标题行命中色块显隐
             checkbox.toggled.connect(self._sync_provider_hit_cards_visibility)
-        row2.addWidget(source_label)
-        row2.addWidget(self.subhd_check)
-        row2.addWidget(self.opensubtitles_check)
-        row2.addWidget(self.assrt_check)
-        row2.addWidget(self.subdl_check)
-        row2.addStretch(1)
+        self._layout_provider_checks()
+        self._apply_default_provider_checks()
 
         params_layout.addLayout(row1)
         params_layout.addLayout(row2)
@@ -928,14 +1029,15 @@ class MainWindow(FluentWindow):
         provider_hits_layout = QHBoxLayout(provider_hits_panel)
         provider_hits_layout.setContentsMargins(8, 0, 0, 0)
         provider_hits_layout.setSpacing(6)
+        self._provider_hits_layout = provider_hits_layout
         self.collect_provider_hit_labels: dict[str, StrongBodyLabel] = {}
         self.collect_provider_hit_cards: dict[str, QFrame] = {}
-        for provider_id, provider_label, bg_color, text_color in [
-            ("subhd", "SubHD", PRIMARY_SOFT, PRIMARY),
-            ("opensubtitles", "OpenSubtitles", RED_SOFT, RED),
-            ("assrt", "ASSRT", ORANGE_SOFT, ORANGE),
-            ("subdl", "SubDL", GREEN_SOFT, GREEN),
-        ]:
+        # 预先创建全部已知源色块，便于 PRIORITY 变更后立刻显示
+        for provider_id in PROVIDER_LABELS:
+            provider_label = PROVIDER_LABELS.get(provider_id, provider_id)
+            bg_color, text_color = PROVIDER_HIT_COLORS.get(
+                provider_id, (PRIMARY_SOFT, PRIMARY)
+            )
             hit_card, hit_label = self._make_provider_hit_card(
                 provider_label=provider_label,
                 bg_color=bg_color,
@@ -943,7 +1045,7 @@ class MainWindow(FluentWindow):
             )
             self.collect_provider_hit_labels[provider_id] = hit_label
             self.collect_provider_hit_cards[provider_id] = hit_card
-            provider_hits_layout.addWidget(hit_card, 1)
+        self._layout_provider_hit_cards()
         # 命中色块放在「任务状态」标题右侧水平对齐
         status_card.headerLayout.addWidget(provider_hits_panel, 1)
         self._sync_provider_hit_cards_visibility()
@@ -967,13 +1069,11 @@ class MainWindow(FluentWindow):
         self.collect_status.setStyleSheet(f"font-size: 15px; color: {TEXT};")
         self.collect_status.setWordWrap(True)
         self.collect_status.setMinimumWidth(200)
-        self.collect_elapsed_label = StrongBodyLabel("耗时 00:00:00")
-        self.collect_elapsed_label.setStyleSheet(f"font-size: 14px; color: {TEXT_SOFT};")
-        self.collect_elapsed_label.setMinimumWidth(120)
+        self._enable_copyable_label(self.collect_status)
         status_row.addWidget(self.collect_status, 1)
-        status_row.addWidget(self.collect_elapsed_label, 0, Qt.AlignRight | Qt.AlignVCenter)
         self.collect_progress_label = CaptionLabel("0%")
         self.collect_progress_label.setStyleSheet(f"color: {TEXT_SOFT}; font-size: 12px;")
+        self._enable_copyable_label(self.collect_progress_label)
         progress_info.addLayout(status_row)
         progress_info.addWidget(self.collect_progress_label)
         progress_info.addStretch(1)
@@ -993,6 +1093,7 @@ class MainWindow(FluentWindow):
         self._collect_success_stat_card: ClickableStatCard | None = None
         for key, label_text, color, bg_color, clickable in [
             ("movies", "电影", PRIMARY, PRIMARY_SOFT, False),
+            ("remaining", "剩余", TEXT_MUTED, LINE_SOFT, False),
             ("failed", "失败", RED, RED_SOFT, False),
             ("downloaded", "成功", GREEN, GREEN_SOFT, True),
             ("accuracy", "准确率", ORANGE, ORANGE_SOFT, False),
@@ -1019,9 +1120,15 @@ class MainWindow(FluentWindow):
         log_card = self._card("采集日志")
         self.copy_collect_log_button = TransparentToolButton(FIF.COPY, self)
         self.copy_collect_log_button.setFixedSize(28, 28)
+        self.copy_collect_log_button.setToolTip("复制日志")
         self.copy_collect_log_button.clicked.connect(self.copy_collect_log)
+        self.download_collect_log_button = TransparentToolButton(FIF.DOWNLOAD, self)
+        self.download_collect_log_button.setFixedSize(28, 28)
+        self.download_collect_log_button.setToolTip("下载日志")
+        self.download_collect_log_button.clicked.connect(self.download_collect_log)
         log_card.headerLayout.addStretch(1)
         log_card.headerLayout.addWidget(self.copy_collect_log_button)
+        log_card.headerLayout.addWidget(self.download_collect_log_button)
 
         self.collect_log = QtTextEdit(self)
         self._configure_log_area(self.collect_log)
@@ -1720,14 +1827,10 @@ class MainWindow(FluentWindow):
 
     def selected_providers(self) -> list[str]:
         providers = []
-        if self.subhd_check.isChecked():
-            providers.append("subhd")
-        if self.opensubtitles_check.isChecked():
-            providers.append("opensubtitles")
-        if self.assrt_check.isChecked():
-            providers.append("assrt")
-        if self.subdl_check.isChecked():
-            providers.append("subdl")
+        for provider_id in self._ordered_provider_ids():
+            checkbox = self.provider_checks.get(provider_id)
+            if checkbox is not None and checkbox.isChecked():
+                providers.append(provider_id)
         return providers
 
     # ── Collection Flow ───────────────────────────────────────────────
@@ -1763,6 +1866,7 @@ class MainWindow(FluentWindow):
             tmdb_token=env_settings.tmdb_token,
             assrt_token=env_settings.assrt_token,
             assrt_api_base_url=env_settings.assrt_api_base_url,
+            assrt_site_base_url=env_settings.assrt_site_base_url,
             subdl_api_key=env_settings.subdl_api_key,
             subdl_base_url=env_settings.subdl_base_url,
             subdl_download_base_url=env_settings.subdl_download_base_url,
@@ -1788,7 +1892,7 @@ class MainWindow(FluentWindow):
         self.collect_progress_label.setText("0%")
         self.collect_status.setText("任务启动中")
         self._collect_download_dir = None
-        for key in ("movies", "failed", "downloaded"):
+        for key in ("movies", "remaining", "failed", "downloaded"):
             if key in self.collect_stat_labels:
                 self.collect_stat_labels[key].setText("0")
         if "accuracy" in self.collect_stat_labels:
@@ -1922,19 +2026,119 @@ class MainWindow(FluentWindow):
         QApplication.clipboard().setText(text)
         InfoBar.success("已复制", "采集日志已复制到剪贴板。", parent=self, position=InfoBarPosition.TOP, duration=2000)
 
+    # 将采集日志另存为 UTF-8 文本，默认文件名采集日志.txt
+    def download_collect_log(self) -> None:
+        text = self.collect_log.toPlainText()
+        if not text.strip():
+            InfoBar.info("暂无日志", "当前没有可下载的采集日志。", parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+        downloads = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
+        default_dir = Path(downloads) if downloads else self.settings.data_dir
+        default_path = str(default_dir / "采集日志.txt")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "下载采集日志",
+            default_path,
+            "文本文件 (*.txt)",
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(text, encoding="utf-8")
+        except OSError as exc:
+            InfoBar.error(
+                "下载失败",
+                f"无法写入采集日志：{exc}",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+        InfoBar.success("已下载", "采集日志已保存为文本文件。", parent=self, position=InfoBarPosition.TOP, duration=2000)
+
+    # 在最小化按钮左侧加入窗口置顶开关
+    def _setup_window_pin(self) -> None:
+        self._window_pinned = False
+        self.pin_button = TransparentToolButton(FIF.PIN, self.titleBar)
+        min_btn = getattr(self.titleBar, "minBtn", None)
+        width = min_btn.width() if min_btn is not None and min_btn.width() > 0 else 46
+        height = min_btn.height() if min_btn is not None and min_btn.height() > 0 else 32
+        self.pin_button.setFixedSize(width, height)
+        self.pin_button.setCheckable(True)
+        self.pin_button.setCursor(Qt.PointingHandCursor)
+        self.pin_button.clicked.connect(self._toggle_always_on_top)
+        button_layout = getattr(self.titleBar, "buttonLayout", None)
+        if button_layout is not None and min_btn is not None:
+            index = button_layout.indexOf(min_btn)
+            button_layout.insertWidget(max(index, 0), self.pin_button)
+        else:
+            self.titleBar.hBoxLayout.addWidget(self.pin_button)
+        self._sync_pin_button_ui(False)
+
+    def _toggle_always_on_top(self) -> None:
+        pinned = self.pin_button.isChecked()
+        self._apply_always_on_top(pinned)
+        self._sync_pin_button_ui(pinned)
+
+    # 按置顶状态切换 PIN/UNPIN 图标与提示文案
+    def _sync_pin_button_ui(self, pinned: bool) -> None:
+        self.pin_button.setIcon(FIF.UNPIN if pinned else FIF.PIN)
+        self.pin_button.setToolTip("取消置顶" if pinned else "窗口置顶")
+
+    # 用 Win32 TOPMOST + QWindow.setFlag 置顶，避免 setWindowFlags 重建窗口抖动
+    def _apply_always_on_top(self, pinned: bool) -> None:
+        hwnd = int(self.winId())
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.setFlag(Qt.WindowType.WindowStaysOnTopHint, pinned)
+        else:
+            state = self.windowState()
+            self.setStayOnTop(pinned)
+            self.setWindowState(state)
+            self._window_pinned = pinned
+            return
+
+        gwl_exstyle = -20
+        ws_ex_topmost = 0x00000008
+        hwnd_topmost = -1
+        hwnd_notopmost = -2
+        swp_nosize = 0x0001
+        swp_nomove = 0x0002
+        swp_noactivate = 0x0010
+        swp_framechanged = 0x0020
+        user32 = ctypes.windll.user32
+        ex_style = int(user32.GetWindowLongW(hwnd, gwl_exstyle))
+        if pinned:
+            ex_style |= ws_ex_topmost
+        else:
+            ex_style &= ~ws_ex_topmost
+        user32.SetWindowLongW(hwnd, gwl_exstyle, ex_style)
+        user32.SetWindowPos(
+            hwnd,
+            hwnd_topmost if pinned else hwnd_notopmost,
+            0,
+            0,
+            0,
+            0,
+            swp_nomove | swp_nosize | swp_noactivate | swp_framechanged,
+        )
+        self._window_pinned = pinned
+
     def update_collect_progress(self, current: int, total: int, movie: str) -> None:
         percent = int(current / total * 100) if total else 0
         self.collect_progress_ring.setValue(percent)
         self.collect_progress_label.setText(f"{percent}%")
         self.collect_status.setText(f"{current}/{total} {movie}")
 
-    # 实时刷新电影/失败/下载计数与准确率卡片
+    # 实时刷新电影/剩余/失败/下载计数与准确率卡片
     def update_collect_stats(self, stats: dict) -> None:
         movie_count = int(stats.get("movieCount", 0) or 0)
         failed_count = int(stats.get("failedCount", 0) or 0)
         download_count = int(stats.get("downloadCount", 0) or 0)
+        remaining_count = max(0, movie_count - failed_count - download_count)
         mapping = {
             "movies": movie_count,
+            "remaining": remaining_count,
             "failed": failed_count,
             "downloaded": download_count,
         }
@@ -1954,21 +2158,20 @@ class MainWindow(FluentWindow):
         if not hasattr(self, "collect_provider_hit_labels"):
             return
         for provider_id, label in self.collect_provider_hit_labels.items():
-            display = {
-                "subhd": "SubHD",
-                "subdl": "SubDL",
-                "assrt": "ASSRT",
-                "opensubtitles": "OpenSubtitles",
-            }.get(provider_id, provider_id)
+            display = PROVIDER_LABELS.get(provider_id, provider_id)
             label.setText(f"{display} 成功采集0条")
             label.setToolTip("成功采集 0 条")
 
-    # 按字幕源勾选状态显示/隐藏对应命中色块
+    # 按字幕源勾选状态显示/隐藏对应命中色块（未列入 PRIORITY 的始终隐藏）
     def _sync_provider_hit_cards_visibility(self, *_args) -> None:
         if not hasattr(self, "collect_provider_hit_cards"):
             return
         checks = getattr(self, "provider_checks", {})
+        visible_ids = set(self._ordered_provider_ids())
         for provider_id, card in self.collect_provider_hit_cards.items():
+            if provider_id not in visible_ids:
+                card.setVisible(False)
+                continue
             checkbox = checks.get(provider_id)
             visible = checkbox.isChecked() if checkbox is not None else True
             card.setVisible(visible)
@@ -1977,17 +2180,11 @@ class MainWindow(FluentWindow):
     def _update_collect_provider_hits(self, provider_stats: dict) -> None:
         if not hasattr(self, "collect_provider_hit_labels"):
             return
-        display_names = {
-            "subhd": "SubHD",
-            "subdl": "SubDL",
-            "assrt": "ASSRT",
-            "opensubtitles": "OpenSubtitles",
-        }
         for provider_id, label in self.collect_provider_hit_labels.items():
             entry = provider_stats.get(provider_id) or {}
             if not isinstance(entry, dict):
                 entry = {}
-            display = display_names.get(provider_id, provider_id)
+            display = PROVIDER_LABELS.get(provider_id, provider_id)
             success = int(entry.get("downloadCount", 0) or 0)
             label.setText(f"{display} 成功采集{success}条")
             tip_parts = [f"成功采集 {success} 条"]
@@ -2354,12 +2551,14 @@ class MainWindow(FluentWindow):
         InfoBar.error("采集失败", message, parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     def show_result_summary(self, result: dict) -> None:
-        # 结束时校准电影总数 / 失败电影数 / 成功电影数 / 准确率
+        # 结束时校准电影总数 / 剩余 / 失败 / 成功 / 准确率
         movie_count = int(result.get("movieCount", 0) or 0)
         failed_count = int(result.get("failedCount", 0) or 0)
         download_count = int(result.get("downloadCount", 0) or 0)
+        remaining_count = max(0, movie_count - failed_count - download_count)
         stat_map = {
             "movies": movie_count,
+            "remaining": remaining_count,
             "failed": failed_count,
             "downloaded": download_count,
         }
