@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import re
+import time
 from urllib.parse import quote, unquote, urljoin, urlparse
 
 import httpx
@@ -24,6 +25,12 @@ DEFAULT_BASE_URLS = [
     "https://subhd.cc",
     "https://subhd.la",
 ]
+# 搜索 httpx 单次请求超时（秒）：快速失败，避免多域名叠满外层 120s
+_SEARCH_HTTPX_TIMEOUT = 12.0
+# httpx 阶段最多探测的域名数（主域 + 少量备用）
+_SEARCH_HTTPX_MAX_BASES = 2
+# httpx 阶段预算（秒）；用尽则跳过 Playwright，抛出超时由编排器换源
+_SEARCH_HTTPX_BUDGET_SECONDS = 45.0
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -655,26 +662,53 @@ class SubhdProvider:
     async def search(self, movie: MovieInfo, log: LogCallback | None = None) -> list[SubtitleCandidate]:
         keywords = self._keywords(movie)
         logger.info("SubHD search start, movie=%s, keywords=%s", movie.title_zh or movie.title, keywords)
+        started = time.monotonic()
 
-        result = await self._search_via_httpx(movie, keywords)
+        result = await self._search_via_httpx(movie, keywords, started=started)
         if result:
             logger.info("SubHD httpx fast search hits, candidates=%d", len(result))
             return result
 
-        logger.info("SubHD httpx fast search exhausted or blocked, falling back to Playwright")
-        return await self._search_via_playwright(movie, keywords)
+        elapsed = time.monotonic() - started
+        if elapsed >= _SEARCH_HTTPX_BUDGET_SECONDS:
+            logger.info(
+                "SubHD skip Playwright: httpx budget exhausted elapsed=%.1fs budget=%.1fs",
+                elapsed,
+                _SEARCH_HTTPX_BUDGET_SECONDS,
+            )
+            # 由编排器按搜索超时处理，避免被记成「无匹配」
+            raise TimeoutError("SubHD 搜索阶段性超时（httpx 预算用尽）")
 
-    async def _search_via_httpx(self, movie: MovieInfo, keywords: list[str]) -> list[SubtitleCandidate]:
+        logger.info("SubHD httpx fast search exhausted or blocked, falling back to Playwright")
+        return await self._search_via_playwright(movie, keywords, started=started)
+
+    async def _search_via_httpx(
+        self,
+        movie: MovieInfo,
+        keywords: list[str],
+        *,
+        started: float,
+    ) -> list[SubtitleCandidate]:
         # 串行探测域名：并发多域名会把 CF cookie 写入共享 jar，导致后续下载 API 全失败
+        search_timeout = httpx.Timeout(_SEARCH_HTTPX_TIMEOUT)
+        bases = self.base_urls[:_SEARCH_HTTPX_MAX_BASES]
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(self.timeout),
+            timeout=search_timeout,
             follow_redirects=True,
             headers=BROWSER_HEADERS,
             cookies=self._shared_cookies,
             proxy=self.proxy,
         ) as client:
-            for base_url in self.base_urls:
+            for base_url in bases:
+                if time.monotonic() - started >= _SEARCH_HTTPX_BUDGET_SECONDS:
+                    logger.info("SubHD httpx search budget exhausted before base=%s", base_url)
+                    break
                 for keyword in keywords:
+                    if time.monotonic() - started >= _SEARCH_HTTPX_BUDGET_SECONDS:
+                        logger.info(
+                            "SubHD httpx search budget exhausted before keyword=%s", keyword
+                        )
+                        break
                     items = await self._httpx_search_one_base(client, movie, keyword, base_url)
                     if not items:
                         continue
@@ -721,7 +755,13 @@ class SubhdProvider:
             logger.info("SubHD httpx search failed: keyword=%s, base=%s, exc=%s", keyword, base_url, exc)
             return None
 
-    async def _search_via_playwright(self, movie: MovieInfo, keywords: list[str]) -> list[SubtitleCandidate]:
+    async def _search_via_playwright(
+        self,
+        movie: MovieInfo,
+        keywords: list[str],
+        *,
+        started: float | None = None,
+    ) -> list[SubtitleCandidate]:
         try:
             import importlib.util
             if importlib.util.find_spec("playwright") is None:
@@ -737,8 +777,14 @@ class SubhdProvider:
             logger.info("SubHD search: browser init failed: %s", exc)
             return []
 
-        for base_url in self.base_urls:
-            for keyword in keywords:
+        search_started = started if started is not None else time.monotonic()
+        # Playwright 仅试主域，减少挂起空等
+        bases = self.base_urls[:1]
+        for base_url in bases:
+            for keyword in keywords[:2]:
+                if time.monotonic() - search_started >= _SEARCH_HTTPX_BUDGET_SECONDS + 30:
+                    logger.info("SubHD Playwright search budget exhausted")
+                    raise TimeoutError("SubHD 搜索阶段性超时（Playwright 预算用尽）")
                 page = None
                 try:
                     page = await self._browser_context.new_page()
@@ -747,18 +793,23 @@ class SubhdProvider:
                     logger.info("SubHD Playwright search: %s", search_url)
 
                     html_text = await self._navigate_with_challenge_handling(
-                        page, search_url, max_retries=2, wait_seconds=3
+                        page, search_url, max_retries=1, wait_seconds=2
                     )
 
                     if not html_text:
-                        logger.info("SubHD Playwright search: failed to load page, keyword=%s, base=%s", keyword, base_url)
+                        logger.info(
+                            "SubHD Playwright search: failed to load page, keyword=%s, base=%s",
+                            keyword,
+                            base_url,
+                        )
                         continue
 
                     items = self._parse_search_results_page(html_text, movie, base_url)
                     if items:
                         logger.info(
                             "SubHD Playwright search hits, candidates=%d, keyword=%s",
-                            len(items), keyword,
+                            len(items),
+                            keyword,
                         )
                         await self._enrich_candidates_with_playwright(page, items)
                         for item in items:
@@ -767,9 +818,18 @@ class SubhdProvider:
                                 ("字幕信息", item.description),
                             )
                         return items
-                    logger.info("SubHD Playwright search no match: keyword=%s, base=%s", keyword, base_url)
+                    logger.info(
+                        "SubHD Playwright search no match: keyword=%s, base=%s", keyword, base_url
+                    )
+                except TimeoutError:
+                    raise
                 except Exception as exc:
-                    logger.info("SubHD Playwright search failed: keyword=%s, base=%s, exc=%s", keyword, base_url, exc)
+                    logger.info(
+                        "SubHD Playwright search failed: keyword=%s, base=%s, exc=%s",
+                        keyword,
+                        base_url,
+                        exc,
+                    )
                     continue
                 finally:
                     if page:

@@ -240,8 +240,19 @@ def test_looks_like_english_only_candidate_detects_eng_filename():
         language_type="双语",
         file_names=["Inception.2010.chs&eng.srt"],
     )
+    # 站点误标双语，但文件名明显纯英 → 视为伪双语
+    mislabeled = SubtitleCandidate(
+        provider="assrt",
+        provider_subtitle_id="3",
+        movie_id="m1",
+        movie_title="Tropa de Elite",
+        subtitle_title="Tropa.De.Elite.2007.720p.BluRay.x264-CtrlHD.eng.srt",
+        language_type="中英双语",
+        file_names=["Tropa.De.Elite.2007.720p.BluRay.x264-CtrlHD.eng.srt"],
+    )
     assert looks_like_english_only_candidate(eng) is True
     assert looks_like_english_only_candidate(bilingual) is False
+    assert looks_like_english_only_candidate(mislabeled) is True
 
 
 def test_validate_candidate_metadata_lenient_rejects_english_only_language_type():

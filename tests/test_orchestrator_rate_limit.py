@@ -319,6 +319,7 @@ async def test_download_timeout_fails_fast(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_network_unreachable_opens_circuit_after_threshold(tmp_path: Path):
+    # 同一部电影作用域内：连续网络失败达阈值后加入 blocked（不设 circuitOpen）
     class AlwaysDown(FakeProvider):
         async def search(self, movie: MovieInfo, log=None):
             raise CollectorError("模拟不可达", ErrorType.NETWORK_UNREACHABLE, self.id)
@@ -367,7 +368,120 @@ async def test_network_unreachable_opens_circuit_after_threshold(tmp_path: Path)
         network_blocked_providers=blocked,
     )
     assert "assrt" in blocked
-    assert stats["assrt"]["circuitOpen"] is True
+    # 网络熔断仅本片有效，不打开整轮 circuitOpen
+    assert stats["assrt"]["circuitOpen"] is False
+
+
+@pytest.mark.asyncio
+async def test_network_circuit_resets_for_next_movie_scope(tmp_path: Path):
+    # 下一部电影使用新的 streak/blocked 时，不应继承上一部的网络熔断
+    class AlwaysDown(FakeProvider):
+        async def search(self, movie: MovieInfo, log=None):
+            raise CollectorError("模拟不可达", ErrorType.NETWORK_UNREACHABLE, self.id)
+
+    provider = AlwaysDown("assrt")
+    orch = SubtitleCollectionOrchestrator()
+    config = TaskConfig(request_interval_ms=0, output_root=tmp_path)
+    stats = {
+        "assrt": {
+            "downloadCount": 0,
+            "downloadAttemptCount": 0,
+            "searchCount": 0,
+            "hitCount": 0,
+            "noMatchCount": 0,
+            "errorCount": 0,
+            "filteredCount": 0,
+            "skippedEnglishCount": 0,
+            "circuitOpen": False,
+            "lastError": "",
+            "lastErrorType": "",
+        }
+    }
+    failed: list = []
+    movie1_streak = {"assrt": 0}
+    movie1_blocked: set[str] = set()
+    for _ in range(2):
+        await orch._collect_movie_candidates(
+            movie=_movie("Movie1"),
+            providers=[provider],
+            config=config,
+            stats=stats,
+            failed_records=failed,
+            network_fail_streak=movie1_streak,
+            network_blocked_providers=movie1_blocked,
+        )
+    assert "assrt" in movie1_blocked
+
+    movie2_streak = {"assrt": 0}
+    movie2_blocked: set[str] = set()
+    await orch._collect_movie_candidates(
+        movie=_movie("Movie2"),
+        providers=[provider],
+        config=config,
+        stats=stats,
+        failed_records=failed,
+        network_fail_streak=movie2_streak,
+        network_blocked_providers=movie2_blocked,
+    )
+    assert "assrt" not in movie2_blocked
+    assert movie2_streak["assrt"] == 1
+
+
+@pytest.mark.asyncio
+async def test_subhd_timeout_shortens_after_streak(tmp_path: Path):
+    # 连续 SubHD 搜索超时后，后续使用缩短超时（不低于 40s 配置下限逻辑由常量保证）
+    class SlowSubhd(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__("subhd")
+            self.timeouts_seen: list[float] = []
+
+        async def search(self, movie: MovieInfo, log=None):
+            # 通过 sleep 超过外层 wait_for；外层 timeout 由编排器决定
+            await asyncio.sleep(10)
+            return []
+
+    provider = SlowSubhd()
+    orch = SubtitleCollectionOrchestrator()
+    config = TaskConfig(request_interval_ms=0, subhd_search_timeout=4)
+    stats = {
+        "subhd": {
+            "downloadCount": 0,
+            "downloadAttemptCount": 0,
+            "searchCount": 0,
+            "hitCount": 0,
+            "noMatchCount": 0,
+            "errorCount": 0,
+            "filteredCount": 0,
+            "skippedEnglishCount": 0,
+            "circuitOpen": False,
+            "lastError": "",
+            "lastErrorType": "",
+        }
+    }
+    failed: list = []
+    subhd_state = {"streak": 0}
+    blocked: set[str] = set()
+
+    async def no_wait(_seconds: float) -> bool:
+        return False
+
+    orch.control.interruptible_sleep = no_wait  # type: ignore[method-assign]
+
+    for title in ("A", "B", "C"):
+        await orch._collect_movie_candidates(
+            movie=_movie(title),
+            providers=[provider],
+            config=config,
+            stats=stats,
+            failed_records=failed,
+            network_blocked_providers=blocked,
+            subhd_timeout_state=subhd_state,
+        )
+
+    assert "subhd" not in blocked
+    assert subhd_state["streak"] == 3
+    assert stats["subhd"]["circuitOpen"] is False
+    assert stats["subhd"]["errorCount"] == 3
 
 
 @pytest.mark.asyncio
@@ -473,7 +587,7 @@ async def test_search_rate_limited_opens_circuit_after_threshold():
 
 @pytest.mark.asyncio
 async def test_subhd_search_timeout_does_not_open_network_circuit():
-    # SubHD 搜索超时只换源，不计入本轮网络熔断
+    # SubHD 搜索超时只换源，不计入本片网络熔断
     class SlowSubhd(FakeProvider):
         def __init__(self) -> None:
             super().__init__("subhd")

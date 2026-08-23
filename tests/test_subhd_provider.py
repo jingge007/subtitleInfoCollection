@@ -179,11 +179,11 @@ async def test_search_writes_structured_events_to_gui_log(monkeypatch):
     movie = MovieInfo(movie_id="tmdb-278", title="The Shawshank Redemption", title_zh="肖申克的救赎", year=1994)
     called = {"httpx": 0, "playwright": 0}
 
-    async def no_httpx(movie_arg, keywords_arg):
+    async def no_httpx(movie_arg, keywords_arg, *, started=0.0):
         called["httpx"] += 1
         return []
 
-    async def no_playwright(movie_arg, keywords_arg):
+    async def no_playwright(movie_arg, keywords_arg, *, started=None):
         called["playwright"] += 1
         return []
 

@@ -42,7 +42,7 @@ ProgressCallback = Callable[[dict[str, object]], None]
 
 # download 路径需要编排器分桶限流的 API 字幕源（SubHD 仅靠每源互斥）
 _DOWNLOAD_RATE_LIMITED_PROVIDERS = frozenset({"assrt", "subdl", "opensubtitles"})
-# 连续网络不可达达到该次数后，本轮熔断该源
+# 同一部电影内连续网络不可达达到该次数后，本片跳过该源（下一部电影自动恢复）
 _NETWORK_FAIL_CIRCUIT_THRESHOLD = 2
 # 连续限流达到该次数后，本轮熔断该源（避免多候选 × 多退避空转）
 _RATE_LIMIT_FAIL_CIRCUIT_THRESHOLD = 2
@@ -50,6 +50,13 @@ _RATE_LIMIT_FAIL_CIRCUIT_THRESHOLD = 2
 _RATE_LIMIT_MAX_RETRIES = 1
 # 同一源连续「纯英/伪双语」内容校验失败达到该次数后提前换源
 _PURE_ENGLISH_FAIL_SWITCH_THRESHOLD = 2
+# SubHD 连续搜索超时达到该次数后缩短后续搜索硬超时
+_SUBHD_TIMEOUT_STREAK_SHORTEN = 2
+# SubHD 连续搜索超时达到该次数后，下次搜索前短冷却
+_SUBHD_TIMEOUT_SOFT_COOLDOWN_STREAK = 3
+_SUBHD_SOFT_COOLDOWN_SECONDS = 8
+# SubHD 缩短后的搜索超时下限（秒）
+_SUBHD_SHORTENED_TIMEOUT_FLOOR = 40
 
 
 # 异常转用户可读文案（避免空 message 导致「下载异常：xxx - 」）
@@ -333,9 +340,10 @@ class SubtitleCollectionOrchestrator:
         best_candidates: list[SubtitleCandidate] = []
         download_results: list[DownloadResult] = []
         download_blocked_providers: set[str] = set()
-        network_blocked_providers: set[str] = set()
-        network_fail_streak: dict[str, int] = {provider.id: 0 for provider in providers}
+        # 限流 streak 整轮共享；网络 streak/熔断改为每部电影本地，见 process_movie
         rate_limit_fail_streak: dict[str, int] = {provider.id: 0 for provider in providers}
+        # SubHD 连续搜索超时计数（整轮共享，用于缩短超时与软冷却）
+        subhd_timeout_state: dict[str, int] = {"streak": 0}
         source_health = await self._get_source_health(providers)
         active_providers = [
             provider
@@ -409,11 +417,16 @@ class SubtitleCollectionOrchestrator:
                     )
                     movie_download_ok = False
                     any_candidate_found = False
+                    # 网络熔断仅本片有效：下一部电影重新尝试各源
+                    movie_network_blocked: set[str] = set()
+                    movie_network_fail_streak: dict[str, int] = {
+                        provider.id: 0 for provider in active_providers
+                    }
 
                     for provider in active_providers:
                         async with state_lock:
                             quota_blocked = provider.id in download_blocked_providers
-                            network_blocked = provider.id in network_blocked_providers
+                            network_blocked = provider.id in movie_network_blocked
                         if quota_blocked:
                             block_reason = "下载额度或限流已熔断"
                             last_type = str(
@@ -431,7 +444,7 @@ class SubtitleCollectionOrchestrator:
                         if network_blocked:
                             self.log(
                                 f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                f"跳过 {provider.id}（本轮网络不可达已熔断），尝试下一个字幕源"
+                                f"跳过 {provider.id}（本片网络不可达已跳过），尝试下一个字幕源"
                             )
                             continue
 
@@ -445,13 +458,14 @@ class SubtitleCollectionOrchestrator:
                                 failed_records=failed_records,
                                 state_lock=state_lock,
                                 on_stats=None,
-                                network_fail_streak=network_fail_streak,
-                                network_blocked_providers=network_blocked_providers,
+                                network_fail_streak=movie_network_fail_streak,
+                                network_blocked_providers=movie_network_blocked,
                                 download_blocked_providers=download_blocked_providers,
                                 rate_limit_fail_streak=rate_limit_fail_streak,
+                                subhd_timeout_state=subhd_timeout_state,
                             )
                         async with state_lock:
-                            if provider.id in network_blocked_providers:
+                            if provider.id in movie_network_blocked:
                                 continue
                             if provider.id in download_blocked_providers:
                                 continue
@@ -513,8 +527,8 @@ class SubtitleCollectionOrchestrator:
                                     download_results=download_results,
                                     state_lock=state_lock,
                                     on_stats=None,
-                                    network_fail_streak=network_fail_streak,
-                                    network_blocked_providers=network_blocked_providers,
+                                    network_fail_streak=movie_network_fail_streak,
+                                    network_blocked_providers=movie_network_blocked,
                                 )
                             if error_type == ErrorType.DOWNLOAD_QUOTA_EXCEEDED:
                                 async with state_lock:
@@ -542,11 +556,11 @@ class SubtitleCollectionOrchestrator:
                                 break
                             if error_type == ErrorType.NETWORK_UNREACHABLE:
                                 async with state_lock:
-                                    if candidate_to_download.provider in network_blocked_providers:
+                                    if candidate_to_download.provider in movie_network_blocked:
                                         self.log(
                                             f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                            f"{candidate_to_download.provider} 网络不可达已熔断，"
-                                            f"本轮后续跳过该来源"
+                                            f"{candidate_to_download.provider} 本片网络不可达"
+                                            f"已跳过该来源"
                                         )
                                         break
                             async with state_lock:
@@ -711,24 +725,43 @@ class SubtitleCollectionOrchestrator:
         network_blocked_providers: set[str] | None = None,
         download_blocked_providers: set[str] | None = None,
         rate_limit_fail_streak: dict[str, int] | None = None,
+        subhd_timeout_state: dict[str, int] | None = None,
     ) -> list[SubtitleCandidate]:
         lock = state_lock or asyncio.Lock()
         streak = network_fail_streak if network_fail_streak is not None else {}
         blocked = network_blocked_providers if network_blocked_providers is not None else set()
         quota_blocked = download_blocked_providers if download_blocked_providers is not None else set()
         rate_streak = rate_limit_fail_streak if rate_limit_fail_streak is not None else {}
+        subhd_state = subhd_timeout_state if subhd_timeout_state is not None else {"streak": 0}
         valid_candidates: list[SubtitleCandidate] = []
         for provider in providers:
             async with lock:
                 provider_stats = stats[provider.id]
                 provider_stats["searchCount"] = int(provider_stats["searchCount"]) + 1
             try:
+                # SubHD 连续超时后：短冷却 + 缩短硬超时，减少 120s 空等
+                if provider.id == "subhd":
+                    async with lock:
+                        timeout_streak = int(subhd_state.get("streak", 0))
+                    if timeout_streak >= _SUBHD_TIMEOUT_SOFT_COOLDOWN_STREAK:
+                        self.log(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] subhd 连续搜索超时 "
+                            f"{timeout_streak} 次，冷却 {_SUBHD_SOFT_COOLDOWN_SECONDS}s 后重试"
+                        )
+                        await self.control.interruptible_sleep(_SUBHD_SOFT_COOLDOWN_SECONDS)
+                        if self.control.is_aborted():
+                            return valid_candidates
+                    timeout = config.subhd_search_timeout
+                    if timeout_streak >= _SUBHD_TIMEOUT_STREAK_SHORTEN:
+                        half = max(1, timeout // 2)
+                        # 配置本身已低于下限时只取一半，避免被 floor 抬高反而更慢
+                        if timeout > _SUBHD_SHORTENED_TIMEOUT_FLOOR:
+                            timeout = max(_SUBHD_SHORTENED_TIMEOUT_FLOOR, half)
+                        else:
+                            timeout = half
+                else:
+                    timeout = config.provider_search_timeout
                 await self._respect_rate_limit(provider.id, config.request_interval_ms)
-                timeout = (
-                    config.subhd_search_timeout
-                    if provider.id == "subhd"
-                    else config.provider_search_timeout
-                )
                 self.log(
                     f"[{datetime.now().strftime('%H:%M:%S')}] {provider.id}.search.start "
                     f"开始搜索字幕源 provider={provider.id} movie={movie.display_title}"
@@ -740,6 +773,8 @@ class SubtitleCollectionOrchestrator:
                 async with lock:
                     streak[provider.id] = 0
                     rate_streak[provider.id] = 0
+                    if provider.id == "subhd":
+                        subhd_state["streak"] = 0
                 provider_valid: list[SubtitleCandidate] = []
                 provider_lenient: list[SubtitleCandidate] = []
                 local_failed: list[FailedRecord] = []
@@ -835,15 +870,16 @@ class SubtitleCollectionOrchestrator:
                     provider_stats["errorCount"] = int(provider_stats["errorCount"]) + 1
                     provider_stats["lastError"] = f"搜索超时（{timeout}秒）"
                     provider_stats["lastErrorType"] = ErrorType.NETWORK_UNREACHABLE
-                    # SubHD 搜索超时常见于慢站/CF，不计入本轮网络熔断
-                    if provider.id != "subhd":
+                    # SubHD 搜索超时：计入连续超时 streak，不计入本片网络熔断
+                    if provider.id == "subhd":
+                        subhd_state["streak"] = int(subhd_state.get("streak", 0)) + 1
+                    else:
                         streak[provider.id] = int(streak.get(provider.id, 0)) + 1
                         if streak[provider.id] >= _NETWORK_FAIL_CIRCUIT_THRESHOLD:
                             blocked.add(provider.id)
-                            provider_stats["circuitOpen"] = True
                             self.log(
                                 f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                f"{provider.id} 连续网络不可达/超时，本轮熔断该字幕源"
+                                f"{provider.id} 本片连续网络不可达/超时，跳过该字幕源"
                             )
                     failed_records.append(
                         FailedRecord(
@@ -872,10 +908,9 @@ class SubtitleCollectionOrchestrator:
                         streak[provider.id] = int(streak.get(provider.id, 0)) + 1
                         if streak[provider.id] >= _NETWORK_FAIL_CIRCUIT_THRESHOLD:
                             blocked.add(provider.id)
-                            provider_stats["circuitOpen"] = True
                             self.log(
                                 f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                f"{provider.id} 连续网络不可达，本轮熔断该字幕源"
+                                f"{provider.id} 本片连续网络不可达，跳过该字幕源"
                             )
                     elif error_type == ErrorType.RATE_LIMITED:
                         rate_streak[provider.id] = int(rate_streak.get(provider.id, 0)) + 1
@@ -1039,7 +1074,6 @@ class SubtitleCollectionOrchestrator:
                         streak[best.provider] = int(streak.get(best.provider, 0)) + 1
                         if streak[best.provider] >= _NETWORK_FAIL_CIRCUIT_THRESHOLD:
                             blocked.add(best.provider)
-                            stats[best.provider]["circuitOpen"] = True
                     failed_records.append(
                         FailedRecord(
                             movie=None,
@@ -1087,7 +1121,6 @@ class SubtitleCollectionOrchestrator:
                         streak[best.provider] = int(streak.get(best.provider, 0)) + 1
                         if streak[best.provider] >= _NETWORK_FAIL_CIRCUIT_THRESHOLD:
                             blocked.add(best.provider)
-                            stats[best.provider]["circuitOpen"] = True
                     failed_records.append(
                         FailedRecord(
                             movie=None,

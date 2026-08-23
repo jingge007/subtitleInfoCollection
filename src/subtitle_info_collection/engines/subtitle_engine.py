@@ -803,6 +803,22 @@ def validate_candidate_metadata(candidate: SubtitleCandidate, lenient: bool = Fa
 
 # 元数据层面像「纯英」：无中文/双语标记且带英文标记（用于下载前跳过空转）
 def looks_like_english_only_candidate(candidate: SubtitleCandidate) -> bool:
+    name_blob = " ".join(
+        str(part)
+        for part in [candidate.subtitle_title, *candidate.file_names]
+        if part
+    )
+    # 标题/文件名侧是否已有中文或双语标记（不含 language_type，避免站点误标）
+    has_zh_in_names = bool(
+        SIMPLIFIED_MARKER_RE.search(name_blob)
+        or BILINGUAL_MARKER_RE.search(name_blob)
+        or ANY_CHINESE_MARKER_RE.search(name_blob)
+    )
+    # 强纯英后缀：即使 language_type 标「中英双语」也视为伪双语（日志中常见 .eng.srt）
+    if re.search(r"(?:^|[.\s_-])eng(?:lish)?(?:[.\s_-]|$)", name_blob, re.I):
+        if not has_zh_in_names:
+            return True
+
     if _check_language_type_bilingual(candidate.language_type):
         return False
     if _check_language_type_has_chinese_and_english(candidate.language_type):
@@ -813,14 +829,6 @@ def looks_like_english_only_candidate(candidate: SubtitleCandidate) -> bool:
     has_any_chinese = bool(ANY_CHINESE_MARKER_RE.search(text))
     if has_simplified or has_bilingual or has_any_chinese:
         return False
-    # 文件名常见纯英后缀：.eng / eng.srt / English
-    name_blob = " ".join(
-        str(part)
-        for part in [candidate.subtitle_title, *candidate.file_names, candidate.language_type]
-        if part
-    )
-    if re.search(r"(?:^|[.\s_-])eng(?:lish)?(?:[.\s_-]|$)", name_blob, re.I):
-        return True
     language_blob = str(candidate.language_type or "").strip()
     if language_blob and re.fullmatch(r"(?:en|eng|english|英文|英语)", language_blob, re.I):
         return True

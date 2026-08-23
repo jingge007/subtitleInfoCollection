@@ -257,7 +257,9 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
     ),
     EnvFieldMeta(
         "SUBTITLE_REQUEST_INTERVAL_MS", "请求间隔 (ms)", CONFIG_GROUP_STRATEGY, "int",
-        "降低限流风险；程序会将过低值抬升到不低于 8000。", "request_interval_ms",
+        "降低限流风险；程序会将过低值抬升到不低于 8000。"
+        "网络不可达仅本片跳过该源，下一部会重新尝试；429 限流仍可能本轮熔断。",
+        "request_interval_ms",
     ),
     EnvFieldMeta(
         "SUBTITLE_MOVIE_CONCURRENCY", "电影并发数", CONFIG_GROUP_STRATEGY, "int",
