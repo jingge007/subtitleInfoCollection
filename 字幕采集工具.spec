@@ -71,7 +71,8 @@ if package_dist_root:
     CONF['distpath'] = str(package_dist_root)
     print(f'检测到自定义打包输出目录：{package_output_path}')
 
-datas = [('.env.example', '.'), ('.env', '.'), ('assets', 'assets')]
+# 只打包模板；真实 .env 由用户在本机生成，禁止随产物分发
+datas = [('.env.example', '.'), ('assets', 'assets')]
 binaries = []
 hiddenimports = []
 

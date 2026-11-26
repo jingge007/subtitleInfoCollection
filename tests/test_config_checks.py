@@ -7,6 +7,7 @@ from subtitle_info_collection.config import (
     evaluate_config,
     upsert_env_values,
 )
+from subtitle_info_collection import config as config_module
 
 
 ENV_KEYS = [
@@ -75,6 +76,65 @@ def test_bootstrap_env_file_uses_pyinstaller_internal_template(tmp_path):
     assert result.created is True
     assert result.env_path == env
     assert env.read_text(encoding="utf-8") == "TMDB_TOKEN=packaged\n"
+
+
+def test_app_config_dir_follows_appdata(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    assert config_module.app_config_dir() == (tmp_path / "subtitleInfoCollection").resolve()
+
+
+def test_bootstrap_env_file_migrates_legacy_exe_env(monkeypatch, tmp_path):
+    exe_dir = tmp_path / "app"
+    exe_dir.mkdir()
+    legacy_env = exe_dir / ".env"
+    legacy_env.write_text("TMDB_TOKEN=legacy\n", encoding="utf-8")
+    appdata = tmp_path / "appdata"
+
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr(config_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(config_module.sys, "executable", str(exe_dir / "app.exe"))
+
+    result = bootstrap_env_file()
+
+    target = appdata / "subtitleInfoCollection" / ".env"
+    assert result.env_path == target
+    assert result.created is True
+    assert result.migrated_from == legacy_env
+    assert target.read_text(encoding="utf-8") == "TMDB_TOKEN=legacy\n"
+    assert legacy_env.exists()
+
+
+def test_bootstrap_env_file_keeps_appdata_env_when_present(monkeypatch, tmp_path):
+    exe_dir = tmp_path / "app"
+    exe_dir.mkdir()
+    (exe_dir / ".env").write_text("TMDB_TOKEN=legacy\n", encoding="utf-8")
+    appdata = tmp_path / "appdata"
+    target = appdata / "subtitleInfoCollection" / ".env"
+    target.parent.mkdir(parents=True)
+    target.write_text("TMDB_TOKEN=current\n", encoding="utf-8")
+
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr(config_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(config_module.sys, "executable", str(exe_dir / "app.exe"))
+
+    result = bootstrap_env_file()
+
+    assert result.env_path == target
+    assert result.created is False
+    assert result.migrated_from is None
+    assert target.read_text(encoding="utf-8") == "TMDB_TOKEN=current\n"
+
+
+def test_bootstrap_env_file_does_not_migrate_for_explicit_root(tmp_path):
+    example = tmp_path / ".env.example"
+    example.write_text("TMDB_TOKEN=\n", encoding="utf-8")
+
+    result = bootstrap_env_file(tmp_path)
+
+    assert result.created is True
+    assert result.migrated_from is None
+    assert result.env_path == tmp_path / ".env"
 
 
 def test_evaluate_config_reports_missing_tokens_and_provider_readiness(tmp_path):

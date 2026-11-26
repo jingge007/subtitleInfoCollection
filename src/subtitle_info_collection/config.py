@@ -117,8 +117,39 @@ def default_data_dir() -> Path:
 
 def _default_env_base_dir() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        return app_config_dir()
     return Path.cwd().resolve()
+
+
+def app_config_dir() -> Path:
+    """用户配置目录：打包后 .env 固定放在 %APPDATA%/subtitleInfoCollection"""
+    base = os.getenv("APPDATA") or str(Path.home())
+    return (Path(base) / "subtitleInfoCollection").resolve()
+
+
+def _legacy_env_dirs() -> list[Path]:
+    """旧版本把 .env 放在 exe 同目录，升级后仅用于迁移与兼容读取"""
+    if not getattr(sys, "frozen", False):
+        return []
+    exe_dir = Path(sys.executable).resolve().parent
+    dirs = [exe_dir, exe_dir / "_internal"]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        dirs.append(Path(meipass))
+    return dirs
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    """按原顺序去重，避免大小写不同的同一路径重复探测"""
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
 
 
 def _env_example_candidates(base_dir: Path) -> list[Path]:
@@ -129,13 +160,30 @@ def _env_example_candidates(base_dir: Path) -> list[Path]:
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         candidates.append(Path(meipass) / ".env.example")
-    return candidates
+    for legacy_dir in _legacy_env_dirs():
+        candidates.append(legacy_dir / ".env.example")
+    return _dedupe_paths(candidates)
+
+
+def _env_file_candidates(base_dir: Path) -> list[Path]:
+    """按优先级列出 .env 位置：用户配置目录优先，旧版 exe 目录兜底"""
+    candidates = [
+        base_dir / ".env",
+        base_dir / "_internal" / ".env",
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / ".env")
+    for legacy_dir in _legacy_env_dirs():
+        candidates.append(legacy_dir / ".env")
+    return _dedupe_paths(candidates)
 
 
 @dataclass(slots=True)
 class EnvBootstrapResult:
     env_path: Path
     created: bool
+    migrated_from: Path | None = None
 
 
 @dataclass(slots=True)
@@ -353,25 +401,30 @@ ENV_FIELD_META: list[EnvFieldMeta] = [
 
 
 def _find_existing_env(base_dir: Path) -> Path | None:
-    candidates = [
-        base_dir / ".env",
-        base_dir / "_internal" / ".env",
-    ]
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        candidates.append(Path(meipass) / ".env")
-    for candidate in candidates:
+    for candidate in _env_file_candidates(base_dir):
         if candidate.exists():
             return candidate
     return None
 
 
 def bootstrap_env_file(root: Path | None = None) -> EnvBootstrapResult:
+    """确保 .env 可用：打包版固定落在用户配置目录，旧版 exe 同目录配置自动复制迁移"""
     base_dir = root.resolve() if root else _default_env_base_dir()
 
     existing = _find_existing_env(base_dir)
     if existing is not None:
-        return EnvBootstrapResult(env_path=existing, created=False)
+        target = base_dir / ".env"
+        should_migrate = (
+            root is None
+            and getattr(sys, "frozen", False)
+            and existing != target
+        )
+        if not should_migrate:
+            return EnvBootstrapResult(env_path=existing, created=False)
+        # 迁移只复制不删除，旧文件保留以便回滚
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(existing, target)
+        return EnvBootstrapResult(env_path=target, created=True, migrated_from=existing)
 
     env_path = base_dir / ".env"
     example_path = next(
@@ -381,6 +434,7 @@ def bootstrap_env_file(root: Path | None = None) -> EnvBootstrapResult:
     if not example_path:
         searched = ", ".join(str(candidate) for candidate in _env_example_candidates(base_dir))
         raise FileNotFoundError(f"缺少环境模板文件：{searched}")
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(example_path, env_path)
     return EnvBootstrapResult(env_path=env_path, created=True)
 

@@ -38,6 +38,8 @@ test-results/
 # IDE and OS files
 .idea/
 .vscode/
+debug.log
+.playwright-mcp/
 *.swp
 *.swo
 .DS_Store

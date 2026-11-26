@@ -374,4 +374,10 @@ if (Test-Path $pwTypesDir) {
 
 Write-Host "清理完成！"
 
+# 安全校验：真实 .env 绝不能进入发布产物
+$leakedEnv = Get-ChildItem -Path $packageOutputPath -Recurse -Force -Filter ".env" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($leakedEnv) {
+  throw "打包目录中出现真实 .env，已阻止发布：$($leakedEnv.FullName)"
+}
+
 Write-Host "打包完成：$packageOutputPath"

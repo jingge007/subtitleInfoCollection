@@ -17,7 +17,7 @@ Windows 桌面字幕信息自动采集工具，用于采集电影字幕候选、
 推荐使用 Python 3.12 或更高版本。
 
 ```powershell
-cd D:\资料\subtitleInfoCollection
+cd <项目根目录>
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
