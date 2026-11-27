@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 
 import { api, type ConfigField, type ConfigGroup } from '@/api/bridge'
 import PageHeader from '@/components/PageHeader.vue'
+import { formatEpochMillis } from '@/utils/datetime'
 
 const loading = ref(true)
 const saving = ref(false)
@@ -19,6 +20,18 @@ const dirtyKeys = computed(() =>
 const activeFields = computed<ConfigField[]>(
   () => groups.value.find((group) => group.key === activeGroup.value)?.fields ?? [],
 )
+
+// 需要额外展示可读时间的时间戳配置项
+const TIMESTAMP_FIELD_KEYS = new Set(['TODAYS_LINES_TOKEN_TIME'])
+
+// 配置项提示文案，时间戳类补充本地时间说明，配置值本身保持原样
+function fieldHint(field: ConfigField): string {
+  const value = values.value[field.key] ?? ''
+  if (TIMESTAMP_FIELD_KEYS.has(field.key) && value) {
+    return `${field.description.replace(/[。.]?$/, '')} · 对应时间 ${formatEpochMillis(value)}`
+  }
+  return field.description
+}
 
 async function load() {
   loading.value = true
@@ -117,7 +130,7 @@ onMounted(load)
               :type="['int', 'float', 'optional_int'].includes(field.widget) ? 'number' : 'text'"
               :placeholder="field.description"
             />
-            <div v-if="values[field.key]" class="hint">{{ field.description }}</div>
+            <div v-if="values[field.key]" class="hint">{{ fieldHint(field) }}</div>
           </div>
         </div>
       </div>
