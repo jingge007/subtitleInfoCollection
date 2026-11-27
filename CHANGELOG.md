@@ -5,6 +5,7 @@
 ### 修复
 
 - 修复「检查更新」在便携目录原始产物上必然失败的问题：Velopack 需要应用清单 `sq.version` 才能定位程序，原产物目录既无 `Update.exe` 也无清单，会抛 `Could not auto-locate app manifest`。
+- 修复自更新后界面全白：pywebview 的 `no-store` 响应头会被 `bottle.static_file` 覆盖，PyInstaller 又把文件时间归零，导致 ETag 恒定、浏览器条件请求始终命中缓存，更新替换程序目录后缓存里的旧 `index.html` 指向已删除的旧资源并返回 404。入口地址现在附带 `index.html` 内容指纹作为缓存键，重新打包或自更新后都会拉到最新页面。
 
 ### 变更
 
