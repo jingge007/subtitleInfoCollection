@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+agent-browser-config.json
 .venv/
 venv/
 env/
@@ -17,12 +18,19 @@ __pycache__/
 coverage.xml
 htmlcov/
 
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
 # Packaging and build outputs
 build/
 dist/
 *.egg-info/
 *.spec
 !字幕采集工具.spec
+scripts/tools/
+work/
 
 # Application data and generated outputs
 subtitle_info_collection.sqlite3
