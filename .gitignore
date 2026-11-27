@@ -45,8 +45,6 @@ test-results/
 
 # Session artifacts
 outputs/*
-!outputs/ui-wireframe/
-!outputs/ui-wireframe/**
 
 # IDE and OS files
 .idea/
