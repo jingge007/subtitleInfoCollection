@@ -122,12 +122,13 @@ let automationState: TaskState = {
 const MOCK_HISTORY: HistoryPage = {
   page: 1,
   pageSize: 20,
-  total: 4,
+  total: 5,
   items: [
-    { id: 4, startedAt: '2026-11-26 14:20', finishedAt: '2026-11-26 15:08', year: 2026, limit: 50, status: 'completed', movieCount: 47, failedCount: 3, downloadCount: 44, downloadDir: 'C:\\Users\\huangjing\\subtitleInfoCollection\\output\\20261126-142000-2026-top50' },
-    { id: 3, startedAt: '2026-11-25 21:10', finishedAt: '2026-11-25 21:41', year: 2026, limit: 30, status: 'completed', movieCount: 30, failedCount: 0, downloadCount: 30, downloadDir: 'C:\\Users\\huangjing\\subtitleInfoCollection\\output\\20261125-211000-2026-top30' },
-    { id: 2, startedAt: '2026-11-24 10:02', finishedAt: '2026-11-24 11:00', year: 2025, limit: 50, status: 'completed', movieCount: 41, failedCount: 9, downloadCount: 32, downloadDir: 'C:\\Users\\huangjing\\subtitleInfoCollection\\output\\20261124-100200-2025-top50' },
-    { id: 1, startedAt: '2026-11-23 16:40', finishedAt: '2026-11-23 16:55', year: 2025, limit: 20, status: 'completed', movieCount: 20, failedCount: 0, downloadCount: 20, downloadDir: 'C:\\Users\\huangjing\\subtitleInfoCollection\\output\\20261123-164000-2025-top20' },
+    { id: 5, startedAt: '2026-11-27T06:21:48+00:00', finishedAt: '', year: 2026, limit: 50, status: 'running', movieCount: 0, failedCount: 0, downloadCount: 0, downloadDir: '' },
+    { id: 4, startedAt: '2026-11-26T06:20:00+00:00', finishedAt: '2026-11-26T07:08:00+00:00', year: 2026, limit: 50, status: 'completed', movieCount: 47, failedCount: 3, downloadCount: 44, downloadDir: 'C:\\Users\\huangjing\\subtitleInfoCollection\\output\\20261126-142000-2026-top50' },
+    { id: 3, startedAt: '2026-11-25T13:10:00+00:00', finishedAt: '2026-11-25T13:41:00+00:00', year: 2026, limit: 30, status: 'completed', movieCount: 30, failedCount: 0, downloadCount: 30, downloadDir: 'C:\\Users\\huangjing\\subtitleInfoCollection\\output\\20261125-211000-2026-top30' },
+    { id: 2, startedAt: '2026-11-24T02:02:00+00:00', finishedAt: '2026-11-24T03:00:00+00:00', year: 2025, limit: 50, status: 'completed', movieCount: 41, failedCount: 9, downloadCount: 32, downloadDir: 'C:\\Users\\huangjing\\subtitleInfoCollection\\output\\20261124-100200-2025-top50' },
+    { id: 1, startedAt: '2026-11-23T08:40:00+00:00', finishedAt: '2026-11-23T08:55:00+00:00', year: 2025, limit: 20, status: 'completed', movieCount: 20, failedCount: 0, downloadCount: 20, downloadDir: 'C:\\Users\\huangjing\\subtitleInfoCollection\\output\\20261123-164000-2025-top20' },
   ],
 }
 
