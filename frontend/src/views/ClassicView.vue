@@ -87,12 +87,14 @@ async function abort() {
         </div>
         <div class="app-kv"><span class="k">浏览器模式</span><span class="v">无头</span></div>
         <div class="app-kv"><span class="k">字段校验</span><span class="v">开启</span></div>
-        <el-button type="primary" style="width: 100%; margin-top: 12px" :loading="starting || active" @click="start">
-          开始采集
-        </el-button>
-        <el-button v-if="active" type="danger" plain style="width: 100%; margin-top: 8px" @click="abort">
-          中止任务
-        </el-button>
+        <div class="action-stack">
+          <el-button type="primary" :loading="starting || active" @click="start">
+            开始采集
+          </el-button>
+          <el-button v-if="active" type="danger" plain @click="abort">
+            中止任务
+          </el-button>
+        </div>
       </div>
 
       <div class="app-col">
@@ -132,6 +134,21 @@ async function abort() {
 </template>
 
 <style scoped>
+.action-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.action-stack :deep(.el-button) {
+  width: 100%;
+}
+
+.action-stack :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
 .progress-meta {
   display: flex;
   justify-content: space-between;

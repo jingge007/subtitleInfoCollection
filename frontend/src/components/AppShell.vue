@@ -103,6 +103,25 @@ onBeforeUnmount(() => {
 
     <div class="main">
       <header class="topbar">
+        <el-tooltip
+          :content="app.collapsed ? '展开侧边栏 (Ctrl+B)' : '收起侧边栏 (Ctrl+B)'"
+          placement="bottom"
+          :show-after="120"
+        >
+          <button
+            class="sidebar-toggle"
+            type="button"
+            :aria-label="app.collapsed ? '展开侧边栏' : '收起侧边栏'"
+            @click="app.toggleSidebar()"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+              <path d="M9 4.5v15" />
+              <path :d="app.collapsed ? 'm12.5 9 3 3-3 3' : 'm15 9-3 3 3 3'" />
+            </svg>
+          </button>
+        </el-tooltip>
+
         <div class="topbar-actions">
           <el-tooltip
             :content="app.alwaysOnTop ? '取消窗口置顶' : '窗口置顶'"
@@ -188,6 +207,40 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   margin-left: auto;
+}
+
+.sidebar-toggle {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--app-text-3);
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.sidebar-toggle:hover {
+  border-color: var(--app-line);
+  background: #f1f5f9;
+  color: var(--app-text);
+}
+
+.sidebar-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .pin-btn {

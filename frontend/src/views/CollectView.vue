@@ -204,13 +204,13 @@ function onDrop(index: number) {
             @drop="onDrop(index)"
           >
             <span class="drag-handle" title="拖动调整优先级" aria-hidden="true">
-              <svg viewBox="0 0 16 24">
-                <circle cx="5.5" cy="5" r="1.8" />
-                <circle cx="10.5" cy="5" r="1.8" />
-                <circle cx="5.5" cy="12" r="1.8" />
-                <circle cx="10.5" cy="12" r="1.8" />
-                <circle cx="5.5" cy="19" r="1.8" />
-                <circle cx="10.5" cy="19" r="1.8" />
+              <svg viewBox="0 0 12 18">
+                <circle cx="3.5" cy="3" r="1.25" />
+                <circle cx="8.5" cy="3" r="1.25" />
+                <circle cx="3.5" cy="9" r="1.25" />
+                <circle cx="8.5" cy="9" r="1.25" />
+                <circle cx="3.5" cy="15" r="1.25" />
+                <circle cx="8.5" cy="15" r="1.25" />
               </svg>
             </span>
             <el-checkbox v-model="item.enabled">{{ item.label }}</el-checkbox>
@@ -355,13 +355,24 @@ function onDrop(index: number) {
   color: var(--app-text-3);
 }
 
+.check-row :deep(.el-checkbox) {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  margin: 0;
+}
+
+.check-row :deep(.el-checkbox__label) {
+  line-height: 28px;
+}
+
 .drag-handle {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
-  flex: 0 0 32px;
-  margin-left: -6px;
+  flex: 0 0 28px;
+  margin-left: -4px;
   border-radius: 6px;
   color: #8b98ab;
   cursor: grab;
@@ -373,8 +384,9 @@ function onDrop(index: number) {
 }
 
 .drag-handle svg {
-  width: 16px;
-  height: 24px;
+  display: block;
+  width: 12px;
+  height: 18px;
   fill: currentColor;
 }
 

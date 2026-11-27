@@ -53,27 +53,6 @@ const isActive = (path: string) => route.path === path
 
 <template>
   <aside class="sidebar" :class="{ collapsed: app.collapsed }">
-    <div class="sidebar-head">
-      <el-tooltip
-        :content="app.collapsed ? '展开侧边栏 (Ctrl+B)' : '收起侧边栏 (Ctrl+B)'"
-        placement="right"
-        :show-after="120"
-      >
-        <button
-          class="sidebar-toggle"
-          type="button"
-          :aria-label="app.collapsed ? '展开侧边栏' : '收起侧边栏'"
-          @click="app.toggleSidebar()"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
-            <path d="M9 4.5v15" />
-            <path :d="app.collapsed ? 'm12.5 9 3 3-3 3' : 'm15 9-3 3 3 3'" />
-          </svg>
-        </button>
-      </el-tooltip>
-    </div>
-
     <nav class="nav">
       <div v-for="group in groups" :key="group.label" class="nav-group">
         <div v-show="!app.collapsed" class="nav-label">{{ group.label }}</div>
@@ -143,50 +122,6 @@ const isActive = (path: string) => route.path === path
 .sidebar.collapsed {
   padding-left: 8px;
   padding-right: 8px;
-}
-
-.sidebar-head {
-  display: flex;
-  justify-content: flex-end;
-  min-height: 36px;
-  margin-bottom: 6px;
-}
-
-.sidebar.collapsed .sidebar-head {
-  justify-content: center;
-}
-
-.sidebar-toggle {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--app-text-3);
-  cursor: pointer;
-  transition:
-    background 120ms ease,
-    color 120ms ease,
-    border-color 120ms ease;
-}
-
-.sidebar-toggle:hover {
-  border-color: var(--app-line);
-  background: #f1f5f9;
-  color: var(--app-text);
-}
-
-.sidebar-toggle svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .nav {

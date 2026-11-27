@@ -114,8 +114,7 @@ onMounted(load)
             <el-input
               v-else
               v-model="values[field.key]"
-              :type="field.secret ? 'password' : field.widget === 'int' || field.widget === 'float' || field.widget === 'optional_int' ? 'number' : 'text'"
-              :show-password="field.secret"
+              :type="['int', 'float', 'optional_int'].includes(field.widget) ? 'number' : 'text'"
               :placeholder="field.description"
             />
             <div v-if="values[field.key]" class="hint">{{ field.description }}</div>
