@@ -1,145 +1,153 @@
 ﻿param(
-  [string]$Python = "python"
+  [string]$Python = "python",
+  [switch]$Pack,
+  [string]$PackVersion = "",
+  [string]$Channel = "win",
+  [string]$VpkVersion = "1.2.161",
+  [switch]$SkipFrontend,
+  [switch]$SkipPlaywright,
+  [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 $Root = Split-Path -Parent $PSScriptRoot
+$Backend = Join-Path $Root "backend"
+$Frontend = Join-Path $Root "frontend"
 $AppName = "字幕采集工具"
+$PackId = "SubtitleInfoCollection"
+$VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
+$DistRoot = Join-Path $Root "dist"
+$PackagePath = Join-Path $DistRoot $AppName
+$ReleasePath = Join-Path $DistRoot "releases"
+$WorkPath = Join-Path $Root "build\pyinstaller"
+$ToolsDir = Join-Path $PSScriptRoot "tools"
+$SpecPath = Join-Path $Backend "$AppName.spec"
+$IconPath = Join-Path $Backend "assets\head_logo.ico"
 Set-Location $Root
+
+function Get-EnvValue {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Key
+  )
+
+  if (!(Test-Path $Path)) {
+    return ""
+  }
+  $text = Get-Content $Path -Raw -Encoding UTF8
+  $match = [regex]::Match($text, "(?m)^\s*$([regex]::Escape($Key))\s*=\s*(.*?)\s*$")
+  if (!$match.Success) {
+    return ""
+  }
+  return $match.Groups[1].Value.Trim().Trim('"').Trim("'")
+}
+
+$configuredDistPath = Get-EnvValue (Join-Path $Root ".env") "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR"
+if (![string]::IsNullOrWhiteSpace($configuredDistPath)) {
+  if ([System.IO.Path]::IsPathRooted($configuredDistPath)) {
+    $customDist = [System.IO.Path]::GetFullPath($configuredDistPath)
+  } else {
+    $customDist = [System.IO.Path]::GetFullPath((Join-Path $Root $configuredDistPath))
+  }
+  $customDist = $customDist.TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+  )
+  if ((Split-Path -Leaf $customDist) -eq $AppName) {
+    $DistRoot = Split-Path -Parent $customDist
+    $PackagePath = $customDist
+  } else {
+    $DistRoot = $customDist
+    $PackagePath = Join-Path $DistRoot $AppName
+  }
+  $ReleasePath = Join-Path $DistRoot "releases"
+}
 
 function Invoke-CheckedCommand {
   param(
-    [Parameter(Mandatory = $true)]
-    [string]$CommandPath,
+    [Parameter(Mandatory = $true)][string]$CommandPath,
     [string[]]$CommandArguments = @()
   )
 
-  & $CommandPath @CommandArguments
+  & $CommandPath @CommandArguments | Out-Host
   $exitCode = $LASTEXITCODE
   if ($exitCode -ne 0) {
     throw "命令执行失败（退出码 $exitCode）：$CommandPath $($CommandArguments -join ' ')"
   }
 }
 
-function ConvertTo-NormalizedPath {
-  param([Parameter(Mandatory = $true)][string]$Path)
-
-  return [System.IO.Path]::GetFullPath($Path).TrimEnd(
-    [System.IO.Path]::DirectorySeparatorChar,
-    [System.IO.Path]::AltDirectorySeparatorChar
-  )
+function Get-AppVersion {
+  $initFile = Join-Path $Backend "src\subtitle_info_collection\__init__.py"
+  $text = Get-Content $initFile -Raw -Encoding UTF8
+  $match = [regex]::Match($text, '__version__\s*=\s*"([^"]+)"')
+  if (!$match.Success) {
+    throw "无法从 $initFile 读取 __version__"
+  }
+  return $match.Groups[1].Value
 }
 
-function Test-PathIsUnderDirectory {
+function Assert-PathUnderDirectory {
   param(
-    [string]$CandidatePath,
+    [Parameter(Mandatory = $true)][string]$CandidatePath,
     [Parameter(Mandatory = $true)][string]$DirectoryPath
   )
 
-  if ([string]::IsNullOrWhiteSpace($CandidatePath)) {
-    return $false
-  }
-
-  try {
-    $normalizedCandidatePath = ConvertTo-NormalizedPath $CandidatePath
-    $normalizedDirectoryPath = ConvertTo-NormalizedPath $DirectoryPath
-  } catch {
-    return $false
-  }
-
+  $candidate = [System.IO.Path]::GetFullPath($CandidatePath).TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+  )
+  $directory = [System.IO.Path]::GetFullPath($DirectoryPath).TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+  )
   if (
-    $normalizedCandidatePath.Equals(
-      $normalizedDirectoryPath,
+    !$candidate.Equals($directory, [System.StringComparison]::OrdinalIgnoreCase) -and
+    !$candidate.StartsWith(
+      "$directory$([System.IO.Path]::DirectorySeparatorChar)",
       [System.StringComparison]::OrdinalIgnoreCase
     )
   ) {
-    return $true
+    throw "拒绝操作预期目录之外的路径：$candidate"
   }
-
-  $directoryWithSeparator = "$normalizedDirectoryPath$([System.IO.Path]::DirectorySeparatorChar)"
-  return $normalizedCandidatePath.StartsWith(
-    $directoryWithSeparator,
-    [System.StringComparison]::OrdinalIgnoreCase
-  )
 }
 
-function Find-ProcessesUsingPackagePath {
-  param([Parameter(Mandatory = $true)][string]$PackagePath)
-
-  $normalizedPackagePath = ConvertTo-NormalizedPath $PackagePath
-  Get-CimInstance Win32_Process |
-    Where-Object {
-      $usesExecutablePath = Test-PathIsUnderDirectory `
-        -CandidatePath $_.ExecutablePath `
-        -DirectoryPath $normalizedPackagePath
-      $usesCommandLine = $false
-      if (![string]::IsNullOrWhiteSpace($_.CommandLine)) {
-        $usesCommandLine = $_.CommandLine.IndexOf(
-          $normalizedPackagePath,
-          [System.StringComparison]::OrdinalIgnoreCase
-        ) -ge 0
-      }
-      $usesExecutablePath -or $usesCommandLine
-    }
-}
-
-if (!(Test-Path ".venv")) {
-  Invoke-CheckedCommand $Python @("-m", "venv", ".venv")
-}
-
-Invoke-CheckedCommand ".\.venv\Scripts\python.exe" @("-m", "pip", "install", "--upgrade", "pip")
-Invoke-CheckedCommand ".\.venv\Scripts\python.exe" @("-m", "pip", "install", "-e", ".[dev]")
-
-# 下载并配置 UPX 压缩工具
-$upxUrl = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
-$upxZipPath = Join-Path $PSScriptRoot "upx.zip"
-$upxDir = Join-Path $PSScriptRoot "upx"
-$upxExePath = Join-Path $upxDir "upx.exe"
-
-if (!(Test-Path $upxExePath)) {
-    Write-Host "正在下载 UPX 压缩工具..."
-    try {
-        Invoke-WebRequest -Uri $upxUrl -OutFile $upxZipPath -ErrorAction Stop
-        Expand-Archive -Path $upxZipPath -DestinationPath $upxDir -Force
-        # UPX 解压后会在子目录中，找到 upx.exe 并移动到上级目录
-        $upxExe = Get-ChildItem -Path $upxDir -Recurse -Filter "upx.exe" | Select-Object -First 1
-        if ($upxExe) {
-            Move-Item -Path $upxExe.FullName -Destination $upxExePath -Force
-        }
-        Remove-Item -Path $upxZipPath -Force -ErrorAction SilentlyContinue
-        Write-Host "UPX 下载完成：$upxExePath"
-    } catch {
-        Write-Host "警告: 无法下载 UPX，将不使用压缩：$($_.Exception.Message)"
-    }
-}
-
-# 将 UPX 目录添加到 PATH（如果可用）
-if (Test-Path $upxExePath) {
-    $env:PATH = "$upxDir;$env:PATH"
-    Write-Host "已启用 UPX 压缩：$upxExePath"
-}
-
-function Find-BrowserExecutable {
+function Remove-SafeDirectory {
   param(
-    [string]$BrowsersPath,
-    [string]$ExecutableName
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$ParentPath
   )
 
-  if ([string]::IsNullOrWhiteSpace($BrowsersPath) -or !(Test-Path $BrowsersPath)) {
-    return $null
+  if (!(Test-Path $Path)) {
+    return
   }
-  return Get-ChildItem -Path $BrowsersPath -Filter $ExecutableName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  Assert-PathUnderDirectory $Path $ParentPath
+  Remove-Item -LiteralPath $Path -Recurse -Force
 }
 
 function Test-PlaywrightBrowserCache {
-  param([string]$BrowsersPath)
+  param(
+    [Parameter(Mandatory = $true)][string]$BrowsersPath,
+    [switch]$RequireFullChromium
+  )
 
-  $chromium = Find-BrowserExecutable $BrowsersPath "chrome.exe"
-  $headlessShell = Find-BrowserExecutable $BrowsersPath "chrome-headless-shell.exe"
-  return [bool]($chromium -and $headlessShell)
+  if (!(Test-Path $BrowsersPath)) {
+    return $false
+  }
+  $headless = Get-ChildItem -Path $BrowsersPath -Filter "chrome-headless-shell.exe" -Recurse -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (!$headless) {
+    return $false
+  }
+  if ($RequireFullChromium) {
+    $chromium = Get-ChildItem -Path $BrowsersPath -Filter "chrome.exe" -Recurse -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    return [bool]$chromium
+  }
+  return $true
 }
 
-function Copy-PlaywrightBrowserCache {
+function Copy-PlaywrightBrowsers {
   param(
     [Parameter(Mandatory = $true)][string]$SourcePath,
     [Parameter(Mandatory = $true)][string]$PackagePath
@@ -155,229 +163,224 @@ function Copy-PlaywrightBrowserCache {
     $targetPath
   )
   if (!(Test-PlaywrightBrowserCache $targetPath)) {
-    throw "复制 Playwright 浏览器失败：目标目录缺少 chrome.exe 或 chrome-headless-shell.exe：$targetPath"
+    throw "复制 Playwright 浏览器失败：$targetPath"
   }
+
+  # 只保留无头浏览器，删除完整 Chromium 与 MCP 浏览器以控制体积
+  Get-ChildItem -LiteralPath $targetPath -Directory -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Name -like "chromium-*" -or $_.Name -like "mcp-chrome-*"
+    } |
+    ForEach-Object {
+      Remove-Item -LiteralPath $_.FullName -Recurse -Force
+      Write-Host "  - 已精简 $($_.Name)"
+    }
 }
 
-$playwrightPackageDirOutput = & ".\.venv\Scripts\python.exe" -c "from pathlib import Path; import playwright; print(Path(playwright.__file__).resolve().parent)"
-if ($LASTEXITCODE -ne 0) {
-  throw "命令执行失败（退出码 $LASTEXITCODE）：.\.venv\Scripts\python.exe -c <resolve playwright package dir>"
-}
-$playwrightPackageDir = ($playwrightPackageDirOutput | Select-Object -Last 1).Trim()
-$playwrightLocalBrowsersPath = Join-Path $playwrightPackageDir "driver\package\.local-browsers"
-$defaultPlaywrightCache = Join-Path $env:LOCALAPPDATA "ms-playwright"
-$resolvedPlaywrightPackageDir = [System.IO.Path]::GetFullPath($playwrightPackageDir)
-$resolvedPlaywrightLocalBrowsersPath = [System.IO.Path]::GetFullPath($playwrightLocalBrowsersPath)
-if (
-  !$resolvedPlaywrightLocalBrowsersPath.StartsWith(
-    $resolvedPlaywrightPackageDir,
-    [System.StringComparison]::OrdinalIgnoreCase
-  )
-) {
-  throw "Playwright 浏览器目录解析异常：$playwrightLocalBrowsersPath"
-}
+function Resolve-Vpk {
+  $command = Get-Command "vpk" -ErrorAction SilentlyContinue
+  if ($command) {
+    return @{ Kind = "exe"; Path = $command.Source }
+  }
 
-$playwrightBrowserSourcePath = $defaultPlaywrightCache
-if (!(Test-PlaywrightBrowserCache $playwrightBrowserSourcePath)) {
-  if (Test-PlaywrightBrowserCache $playwrightLocalBrowsersPath) {
-    Write-Host "检测到包内 Playwright 浏览器缓存，将迁移到本机缓存：$defaultPlaywrightCache"
-    $copyScriptPath = Join-Path $PSScriptRoot "copy_playwright_browsers.ps1"
+  $dotnetInstaller = Join-Path $ToolsDir "dotnet-install.ps1"
+  $dotnetDir = Join-Path $ToolsDir "dotnet"
+  $dotnetExe = Join-Path $dotnetDir "dotnet.exe"
+  if (!(Test-Path $dotnetExe)) {
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    if (!(Test-Path $dotnetInstaller)) {
+      Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile $dotnetInstaller -UseBasicParsing -TimeoutSec 120
+    }
+    Write-Host "安装本地 .NET 8 运行时（仅用于 vpk）..."
     Invoke-CheckedCommand "powershell" @(
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
-      "-File", $copyScriptPath,
-      $playwrightLocalBrowsersPath,
-      $defaultPlaywrightCache
+      "-File", $dotnetInstaller,
+      "-Runtime", "dotnet",
+      "-Channel", "8.0",
+      "-InstallDir", $dotnetDir
     )
   }
-}
 
-if (!(Test-PlaywrightBrowserCache $playwrightBrowserSourcePath)) {
-  $previousPlaywrightBrowsersPath = $env:PLAYWRIGHT_BROWSERS_PATH
-  Remove-Item Env:\PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
-  try {
-    Invoke-CheckedCommand ".\.venv\Scripts\python.exe" @("-m", "playwright", "install", "chromium")
-  } finally {
-    if ($null -eq $previousPlaywrightBrowsersPath) {
-      Remove-Item Env:\PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
-    } else {
-      $env:PLAYWRIGHT_BROWSERS_PATH = $previousPlaywrightBrowsersPath
+  $vpkRoot = Join-Path $ToolsDir "vpk\$VpkVersion"
+  $vpkDll = Join-Path $vpkRoot "tools\net8.0\any\vpk.dll"
+  if (!(Test-Path $vpkDll)) {
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    $nupkgPath = Join-Path $ToolsDir "vpk.$VpkVersion.nupkg"
+    if (!(Test-Path $nupkgPath)) {
+      $url = "https://github.com/velopack/velopack/releases/download/$VpkVersion/vpk.$VpkVersion.nupkg"
+      Write-Host "下载 vpk $VpkVersion：$url"
+      Invoke-WebRequest -Uri $url -OutFile $nupkgPath -UseBasicParsing -TimeoutSec 300
     }
+    $zipPath = Join-Path $ToolsDir "vpk.$VpkVersion.zip"
+    Copy-Item -LiteralPath $nupkgPath -Destination $zipPath -Force
+    Expand-Archive -Path $zipPath -DestinationPath $vpkRoot -Force
   }
+  if (!(Test-Path $vpkDll)) {
+    throw "vpk 解压失败，未找到：$vpkDll"
+  }
+  return @{ Kind = "dotnet"; Dotnet = $dotnetExe; Dll = $vpkDll }
 }
 
-if (!(Test-PlaywrightBrowserCache $playwrightBrowserSourcePath)) {
-  throw "Playwright Chromium 未完整安装，请重新运行本打包脚本。"
-}
-
-if (Test-Path $playwrightLocalBrowsersPath) {
-  Remove-Item -LiteralPath $playwrightLocalBrowsersPath -Recurse -Force
-}
-
-$configuredDistPath = ""
-if (Test-Path ".env") {
-  $envText = Get-Content ".env" -Raw -Encoding UTF8
-  $distMatch = [regex]::Match(
-    $envText,
-    "(?m)^\s*SUBTITLE_COLLECTION_PACKAGE_DIST_DIR\s*=\s*(.+?)\s*$"
+function Invoke-VpkPack {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$Vpk,
+    [Parameter(Mandatory = $true)][string]$Version
   )
-  if (!$distMatch.Success) {
-    $distMatch = [regex]::Match(
-      $envText,
-      "SUBTITLE_COLLECTION_PACKAGE_DIST_DIR\s*=\s*([^\r\n#]+)"
-    )
-  }
-  if ($distMatch.Success) {
-    $configuredDistPath = $distMatch.Groups[1].Value.Trim()
-    $configuredDistPath = $configuredDistPath.Trim('"').Trim("'")
-  }
-}
 
-$resolvedDistPath = Join-Path $Root "dist"
-$packageOutputPath = Join-Path $resolvedDistPath $AppName
-if (![string]::IsNullOrWhiteSpace($configuredDistPath)) {
-  if ([System.IO.Path]::IsPathRooted($configuredDistPath)) {
-    $resolvedDistPath = [System.IO.Path]::GetFullPath($configuredDistPath)
+  $arguments = @(
+    "--yes", "pack",
+    "--packId", $PackId,
+    "--packVersion", $Version,
+    "--packDir", $PackagePath,
+    "--mainExe", "$AppName.exe",
+    "--packTitle", $AppName,
+    "--packAuthors", "jingge007",
+    "--icon", $IconPath,
+    "--outputDir", $ReleasePath,
+    "--channel", $Channel,
+    "--runtime", "win-x64",
+    "--skipVeloAppCheck"
+  )
+  $releaseNotes = Join-Path $Root "CHANGELOG.md"
+  if (Test-Path $releaseNotes) {
+    $arguments += @("--releaseNotes", $releaseNotes)
+  }
+
+  if ($Vpk.Kind -eq "exe") {
+    Invoke-CheckedCommand $Vpk.Path $arguments
   } else {
-    $resolvedDistPath = [System.IO.Path]::GetFullPath((Join-Path $Root $configuredDistPath))
-  }
-
-  $normalizedConfiguredPath = $resolvedDistPath.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-  if ((Split-Path -Leaf $normalizedConfiguredPath) -eq $AppName) {
-    $resolvedDistPath = Split-Path -Parent $normalizedConfiguredPath
-    $packageOutputPath = $normalizedConfiguredPath
-  } else {
-    $packageOutputPath = Join-Path $resolvedDistPath $AppName
+    Invoke-CheckedCommand $Vpk.Dotnet (@("exec", $Vpk.Dll) + $arguments)
   }
 }
 
-$runningPackageProcesses = Find-ProcessesUsingPackagePath $packageOutputPath | Select-Object -First 8
-if ($runningPackageProcesses) {
-  $processSummary = ($runningPackageProcesses | ForEach-Object {
-      "$($_.Name)(PID $($_.ProcessId))"
-    }) -join ", "
-  throw "请先关闭正在运行的旧版程序或浏览器子进程；它们正在占用打包目录：$packageOutputPath；占用进程：$processSummary"
+if (!(Test-Path $VenvPython)) {
+  Invoke-CheckedCommand $Python @("-m", "venv", (Join-Path $Root ".venv"))
 }
-
-$pyinstallerArgs = @(
-  "--clean",
-  "--noconfirm"
+Invoke-CheckedCommand $VenvPython @("-m", "pip", "install", "--upgrade", "pip")
+Invoke-CheckedCommand $VenvPython @(
+  "-m", "pip", "install", "-e", "${Backend}[dev]"
 )
 
-if (![string]::IsNullOrWhiteSpace($configuredDistPath)) {
-  Write-Host "检测到自定义打包输出目录：$packageOutputPath"
-  $pyinstallerArgs += "--distpath"
-  $pyinstallerArgs += $resolvedDistPath
+if (!$SkipFrontend) {
+  if (!(Test-Path (Join-Path $Frontend "package-lock.json"))) {
+    throw "缺少 frontend/package-lock.json，无法执行 npm ci"
+  }
+  Push-Location $Frontend
+  try {
+    Invoke-CheckedCommand "npm" @("ci")
+    Invoke-CheckedCommand "npm" @("run", "build")
+  } finally {
+    Pop-Location
+  }
+}
+if (!(Test-Path (Join-Path $Frontend "dist\index.html"))) {
+  throw "缺少前端构建产物：frontend\dist\index.html"
 }
 
-# 使用 spec 文件（已配置收集和排除规则）
-Invoke-CheckedCommand ".\.venv\Scripts\pyinstaller.exe" ($pyinstallerArgs + @("字幕采集工具.spec"))
-
-Start-Sleep -Seconds 5
-Copy-PlaywrightBrowserCache $playwrightBrowserSourcePath $packageOutputPath
-
-
-# 精简 Playwright 浏览器：只保留 headless shell，删除完整 Chromium 和 MCP Chrome
-Write-Host '开始精简 Playwright 浏览器...'
-$browsersDir = Join-Path $packageOutputPath '_internal\playwright\driver\package\.local-browsers'
-if (Test-Path $browsersDir) {
-    $chromiumDir = Join-Path $browsersDir 'chromium-1217'
-    if (Test-Path $chromiumDir) {
-        Remove-Item -LiteralPath $chromiumDir -Recurse -Force
-        Write-Host '  - 已删除完整 Chromium (chromium-1217)'
-    }
-    $mcpDirs = Get-ChildItem -Path $browsersDir -Directory -Filter 'mcp-chrome-*' -ErrorAction SilentlyContinue
-    foreach ($d in $mcpDirs) {
-        Remove-Item -LiteralPath $d.FullName -Recurse -Force
-        Write-Host "  - 已删除 MCP Chrome: $($d.Name)"
-    }
+$appVersion = Get-AppVersion
+if ([string]::IsNullOrWhiteSpace($PackVersion)) {
+  $PackVersion = $appVersion
 }
-Write-Host 'Playwright 浏览器精简完成！'
-
-# 清理不必要的文件以减小体积
-Write-Host "开始清理不必要的文件..."
-
-# 删除翻译文件（.qm）- PySide6 翻译文件在运行时不需要
-$qmFiles = Get-ChildItem -Path $packageOutputPath -Filter "*.qm" -Recurse -ErrorAction SilentlyContinue
-if ($qmFiles) {
-    $qmFiles | Remove-Item -Force
-    Write-Host "  - 已删除 $($qmFiles.Count) 个翻译文件（.qm）"
+if ($PackVersion -ne $appVersion) {
+  Write-Warning "PackVersion=$PackVersion 与 __version__=$appVersion 不一致"
+}
+if ($PackVersion -notmatch '^\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$') {
+  throw "PackVersion 不是有效 SemVer：$PackVersion"
 }
 
-# 删除类型注解文件（.pyi）- 运行时不需要
-$pyiFiles = Get-ChildItem -Path $packageOutputPath -Filter "*.pyi" -Recurse -ErrorAction SilentlyContinue
-if ($pyiFiles) {
-    $pyiFiles | Remove-Item -Force
-    Write-Host "  - 已删除 $($pyiFiles.Count) 个类型注解文件（.pyi）"
+$playwrightCache = Join-Path $env:LOCALAPPDATA "ms-playwright"
+if (!$SkipPlaywright) {
+  if (!(Test-PlaywrightBrowserCache $playwrightCache -RequireFullChromium)) {
+    Invoke-CheckedCommand $VenvPython @("-m", "playwright", "install", "chromium")
+  }
+  if (!(Test-PlaywrightBrowserCache $playwrightCache -RequireFullChromium)) {
+    throw "Playwright Chromium 未完整安装：$playwrightCache"
+  }
 }
 
-# 删除 __pycache__ 目录
-$pycacheDirs = Get-ChildItem -Path $packageOutputPath -Filter "__pycache__" -Recurse -Directory -ErrorAction SilentlyContinue
-if ($pycacheDirs) {
-    $pycacheDirs | Remove-Item -Recurse -Force
-    Write-Host "  - 已删除 $($pycacheDirs.Count) 个 __pycache__ 目录"
+if (!$SkipBuild) {
+  Remove-SafeDirectory $PackagePath $DistRoot
+  New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
+  Invoke-CheckedCommand $VenvPython @(
+    "-m", "PyInstaller",
+    "--clean",
+    "--noconfirm",
+    "--distpath", $DistRoot,
+    "--workpath", $WorkPath,
+    $SpecPath
+  )
+} elseif (!(Test-Path (Join-Path $PackagePath "$AppName.exe"))) {
+  throw "指定了 -SkipBuild，但现有产物不存在：$PackagePath\$AppName.exe"
 }
 
-# 删除 .dist-info 和 .egg-info 目录（元数据不需要）
-$infoDirs = Get-ChildItem -Path $packageOutputPath -Filter "*.dist-info" -Recurse -Directory -ErrorAction SilentlyContinue
-$infoDirs += Get-ChildItem -Path $packageOutputPath -Filter "*.egg-info" -Recurse -Directory -ErrorAction SilentlyContinue
-if ($infoDirs) {
-    $infoDirs | Remove-Item -Recurse -Force
-    Write-Host "  - 已删除 $($infoDirs.Count) 个元数据目录（.dist-info/.egg-info）"
+if (!(Test-Path (Join-Path $PackagePath "$AppName.exe"))) {
+  throw "PyInstaller 未生成主程序：$PackagePath\$AppName.exe"
+}
+if (!(Test-Path (Join-Path $PackagePath "_internal\webui\index.html"))) {
+  throw "产物缺少前端页面：_internal\webui\index.html"
+}
+if (!(Test-Path (Join-Path $PackagePath "_internal\assets\head_logo.ico"))) {
+  throw "产物缺少图标：_internal\assets\head_logo.ico"
 }
 
-
-# 删除不需要的 PySide6 插件
-$pluginsDir = Join-Path $packageOutputPath '_internal\PySide6\plugins'
-if (Test-Path $pluginsDir) {
-    $unusedPlugins = @(
-        'assetimporters', 'canbus', 'designer', 'geometryloaders', 'geoservices',
-        'multimedia', 'networkinformation', 'position', 'qmllint', 'qmltooling',
-        'renderers', 'renderplugins', 'sceneparsers', 'scxmldatamodel',
-        'sensors', 'texttospeech', 'webview'
-    )
-    $removedPlugins = 0
-    foreach ($plugin in $unusedPlugins) {
-        $pluginPath = Join-Path $pluginsDir $plugin
-        if (Test-Path $pluginPath) {
-            Remove-Item -LiteralPath $pluginPath -Recurse -Force
-            $removedPlugins++
-        }
-    }
-    if ($removedPlugins -gt 0) {
-        Write-Host "  - 已删除 $removedPlugins 个不需要的 Qt 插件目录"
-    }
+if (!$SkipPlaywright) {
+  Copy-PlaywrightBrowsers $playwrightCache $PackagePath
 }
 
-# 删除 PySide6 开发头文件和类型系统文件
-$pyside6Dir = Join-Path $packageOutputPath '_internal\PySide6'
-if (Test-Path $pyside6Dir) {
-    foreach ($sub in @('include', 'typesystems')) {
-        $subPath = Join-Path $pyside6Dir $sub
-# Delete QML
-$qmlDir = Join-Path $pyside6Dir "qml\PySide6\qml"
-if (Test-Path $qmlDir) { Remove-Item -LiteralPath $qmlDir -Recurse -Force; Write-Host "  - 已删除 QML 目录" }
+Write-Host "清理运行时无关文件..."
+Get-ChildItem -Path $PackagePath -Filter "*.pyi" -Recurse -File -ErrorAction SilentlyContinue |
+  Remove-Item -Force
+Get-ChildItem -Path $PackagePath -Filter "__pycache__" -Recurse -Directory -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force
+Get-ChildItem -Path $PackagePath -Filter "*.dist-info" -Recurse -Directory -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force
+Get-ChildItem -Path $PackagePath -Filter "*.egg-info" -Recurse -Directory -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force
 
-        if (Test-Path $subPath) {
-            Remove-Item -LiteralPath $subPath -Recurse -Force
-            Write-Host "  - 已删除 PySide6/$sub"
-        }
-    }
+$playwrightTypes = Join-Path $PackagePath "_internal\playwright\driver\package\types"
+if (Test-Path $playwrightTypes) {
+  Remove-Item -LiteralPath $playwrightTypes -Recurse -Force
 }
-
-# 删除 Playwright TypeScript 类型定义
-$pwTypesDir = Join-Path $packageOutputPath '_internal\playwright\driver\package\types'
-if (Test-Path $pwTypesDir) {
-    Remove-Item -LiteralPath $pwTypesDir -Recurse -Force
-    Write-Host '  - 已删除 Playwright TypeScript 类型定义'
-}
-
-Write-Host "清理完成！"
-
-# 安全校验：真实 .env 绝不能进入发布产物
-$leakedEnv = Get-ChildItem -Path $packageOutputPath -Recurse -Force -Filter ".env" -ErrorAction SilentlyContinue | Select-Object -First 1
+$leakedEnv = Get-ChildItem -Path $PackagePath -Recurse -Force -Filter ".env" -ErrorAction SilentlyContinue |
+  Select-Object -First 1
 if ($leakedEnv) {
   throw "打包目录中出现真实 .env，已阻止发布：$($leakedEnv.FullName)"
 }
 
-Write-Host "打包完成：$packageOutputPath"
+$secretPattern = "(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC )?PRIVATE KEY-----)"
+$textExtensions = @(".json", ".txt", ".log", ".js", ".py", ".html", ".css", ".md", ".yaml", ".yml")
+$secretHits = Get-ChildItem -Path $PackagePath -Recurse -File -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.Length -lt 2MB -and
+    $textExtensions -contains $_.Extension.ToLowerInvariant() -and
+    $_.FullName -notmatch '\\(SelfTest|tests?)\\'
+  } |
+  Select-String -Pattern $secretPattern -ErrorAction SilentlyContinue
+if ($secretHits) {
+  $first = $secretHits | Select-Object -First 1
+  throw "产物文本中发现疑似密钥：$($first.Path):$($first.LineNumber)"
+}
+
+Write-Host "便携目录打包完成：$PackagePath"
+
+if ($Pack) {
+  $vpk = Resolve-Vpk
+  Write-Host "使用 vpk 生成 Velopack 发布包（版本 $PackVersion）..."
+  Invoke-VpkPack $vpk $PackVersion
+
+  $requiredAssets = @(
+    "releases.win.json",
+    "$PackId-$PackVersion-full.nupkg",
+    "$PackId-win-Setup.exe",
+    "$PackId-win-Portable.zip"
+  )
+  foreach ($asset in $requiredAssets) {
+    $assetPath = Join-Path $ReleasePath $asset
+    if (!(Test-Path $assetPath)) {
+      throw "缺少发布资产：$assetPath"
+    }
+  }
+  Write-Host "Velopack 发布目录：$ReleasePath"
+  Get-ChildItem -LiteralPath $ReleasePath | Select-Object Name, Length, LastWriteTime
+}
