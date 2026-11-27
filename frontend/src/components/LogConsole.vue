@@ -8,12 +8,14 @@ const props = withDefaults(
     emptyText?: string
     autoFollow?: boolean
     fill?: boolean
+    stretch?: boolean
   }>(),
   {
     height: 240,
     emptyText: '等待任务开始…',
     autoFollow: true,
     fill: false,
+    stretch: false,
   },
 )
 
@@ -21,6 +23,9 @@ const body = ref<HTMLElement | null>(null)
 const following = ref(props.autoFollow)
 
 const showJump = computed(() => !following.value && props.lines.length > 0)
+
+// stretch 模式由父容器决定高度，fill 模式使用固定视口高度，两者都不写内联高度
+const fixedHeight = computed(() => (props.fill || props.stretch ? undefined : { height: `${props.height}px` }))
 
 function scrollToBottom() {
   const element = body.value
@@ -53,11 +58,11 @@ watch(
 </script>
 
 <template>
-  <div class="log-shell" :class="{ fill }">
+  <div class="log-shell" :class="{ fill, stretch }">
     <div
       ref="body"
       class="log-body"
-      :style="fill ? undefined : { height: `${height}px` }"
+      :style="fixedHeight"
       role="log"
       @scroll="onScroll"
     >
@@ -102,6 +107,19 @@ watch(
 
 .log-shell.fill .log-body {
   height: clamp(220px, calc(100vh - 430px), 560px);
+}
+
+/* stretch 模式：高度完全由父容器决定，用于铺满页面剩余空间 */
+.log-shell.stretch {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.log-shell.stretch .log-body {
+  flex: 1;
+  min-height: 0;
 }
 
 .log-body::-webkit-scrollbar {
