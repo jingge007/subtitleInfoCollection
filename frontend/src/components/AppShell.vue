@@ -8,7 +8,7 @@ import { useAppStore } from '@/stores/app'
 import SideBar from './SideBar.vue'
 
 const app = useAppStore()
-const version = computed(() => app.info?.version ?? '0.2.2')
+const version = computed(() => app.info?.version ?? '0.2.3')
 const status = ref<AppStatus>({
   collector: 'idle',
   parser: 'idle',

@@ -107,7 +107,7 @@ cd ..
 常用参数：
 
 ```powershell
-.\scripts\build_windows.ps1 -Pack -PackVersion 0.2.2
+.\scripts\build_windows.ps1 -Pack -PackVersion 0.2.3
 .\scripts\build_windows.ps1 -SkipFrontend
 .\scripts\build_windows.ps1 -SkipPlaywright
 ```
@@ -167,7 +167,7 @@ https://github.com/jingge007/subtitleInfoCollection
 
 1. 更新版本号与 `CHANGELOG.md`。
 2. 执行 `.\scripts\build_windows.ps1 -Pack`。
-3. 创建 tag，例如 `v0.2.2`。
+3. 创建 tag，例如 `v0.2.3`。
 4. 把 `dist\releases` 下全部文件上传到 Release。
 5. 确认 `releases.win.json` 可匿名访问。
 

@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from . import __version__
 from .engines.tokenizer import tokenize_movie_name, tokenize_subtitle_content
 
 
@@ -351,7 +352,8 @@ class TaskConfig:
     opensubtitles_username: str = ""  # OpenSubtitles用户名
     opensubtitles_password: str = ""  # OpenSubtitles密码
     opensubtitles_base_url: str = "https://api.opensubtitles.com/api/v1"  # OpenSubtitles API基础URL
-    opensubtitles_user_agent: str = "subtitleInfoCollection v0.1"  # OpenSubtitles用户代理
+    # OpenSubtitles 用户代理，随应用版本自动更新
+    opensubtitles_user_agent: str = f"subtitleInfoCollection v{__version__}"
     provider_priority: list[str] = field(  # 字幕源优先级
         default_factory=lambda: ["subhd", "opensubtitles", "assrt", "subdl"]
     )

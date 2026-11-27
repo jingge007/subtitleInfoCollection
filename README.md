@@ -198,7 +198,7 @@ https://github.com/jingge007/subtitleInfoCollection
 1. 修改 `backend/src/subtitle_info_collection/__init__.py` 与 `backend/pyproject.toml` 的版本号；
 2. 更新 `CHANGELOG.md`；
 3. 执行 `.\scripts\build_windows.ps1 -Pack`；
-4. 创建与版本一致的 tag（例如 `v0.2.2`）；
+4. 创建与版本一致的 tag（例如 `v0.2.3`）；
 5. 把 `dist\releases` 中全部资产上传到该 Release；
 6. 确认 `releases.win.json` 可匿名访问。
 

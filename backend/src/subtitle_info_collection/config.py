@@ -6,12 +6,15 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import __version__
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover
     load_dotenv = None
 
 
+DEFAULT_OPENSUBTITLES_USER_AGENT = f"subtitleInfoCollection v{__version__}"
 DEFAULT_PROVIDER_PRIORITY = ["subhd", "assrt", "opensubtitles", "subdl"]
 DEFAULT_REQUEST_INTERVAL_MS = 8_000
 DEFAULT_MOVIE_CONCURRENCY = 2
@@ -589,7 +592,7 @@ class AppSettings:
     opensubtitles_username: str = ""
     opensubtitles_password: str = ""
     opensubtitles_base_url: str = "https://api.opensubtitles.com/api/v1"
-    opensubtitles_user_agent: str = "subtitleInfoCollection v0.1"
+    opensubtitles_user_agent: str = DEFAULT_OPENSUBTITLES_USER_AGENT
     todays_lines_username: str = ""
     todays_lines_password: str = ""
     todays_lines_token: str = ""
@@ -628,7 +631,7 @@ class AppSettings:
                 "OPENSUBTITLES_BASE_URL", "https://api.opensubtitles.com/api/v1"
             ),
             opensubtitles_user_agent=os.getenv(
-                "OPENSUBTITLES_USER_AGENT", "subtitleInfoCollection v0.1"
+                "OPENSUBTITLES_USER_AGENT", DEFAULT_OPENSUBTITLES_USER_AGENT
             ),
             todays_lines_username=os.getenv("TODAYS_LINES_USERNAME", ""),
             todays_lines_password=os.getenv("TODAYS_LINES_PASSWORD", ""),

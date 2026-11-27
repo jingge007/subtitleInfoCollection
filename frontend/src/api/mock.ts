@@ -8,7 +8,7 @@ import type {
 } from './bridge'
 
 const APP_INFO: AppInfo = {
-  version: '0.2.2',
+  version: '0.2.3',
   dataDir: 'C:\\Users\\huangjing\\subtitleInfoCollection',
   envPath: '%APPDATA%\\subtitleInfoCollection\\.env',
   programDir: '%LocalAppData%\\SubtitleInfoCollection\\current',
@@ -20,8 +20,8 @@ const APP_INFO: AppInfo = {
 let updateState: UpdateState = {
   status: 'latest',
   available: false,
-  currentVersion: '0.2.2',
-  latestVersion: '0.2.2',
+  currentVersion: '0.2.3',
+  latestVersion: '0.2.3',
   notes: '',
   progress: 0,
   error: '',
@@ -160,7 +160,7 @@ export async function mockCall<T>(name: string, args: unknown[]): Promise<T> {
       updateState = {
         status: 'available',
         available: true,
-        currentVersion: '0.2.2',
+        currentVersion: '0.2.3',
         latestVersion: '0.2.3',
         notes: '修复 SubHD 验证码重试偶发卡住\n优化采集日志增量拉取\n完善 9 页交互与侧栏折叠',
         progress: 0,
