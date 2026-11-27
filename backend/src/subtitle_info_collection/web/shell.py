@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -31,6 +32,19 @@ def _webui_dir() -> Path:
             return candidate
     searched = ", ".join(str(item) for item in candidates)
     raise FileNotFoundError(f"未找到前端构建产物，请先执行 npm run build：{searched}")
+
+
+def _webui_url() -> str:
+    """打包态入口地址：附带 index.html 内容指纹，规避 WebView2 缓存的旧页面。
+
+    pywebview 的 no-store 响应头会被 bottle.static_file 覆盖，实际只返回
+    ETag/Last-Modified；而 PyInstaller 会把文件时间归零，导致 ETag 恒定，
+    浏览器条件请求始终命中缓存。程序目录被自更新替换后，缓存里的旧
+    index.html 会指向已删除的旧资源，导致白屏。用内容指纹做缓存键可规避。
+    """
+    index_path = _webui_dir() / "index.html"
+    digest = hashlib.sha1(index_path.read_bytes()).hexdigest()[:8]
+    return f"{index_path}?v={__version__}-{digest}"
 
 
 def _acquire_single_instance() -> bool:
@@ -120,7 +134,7 @@ def run_app(argv: list[str]) -> int:
         if args.dev_url:
             url = args.dev_url
         else:
-            url = str(_webui_dir() / "index.html")
+            url = _webui_url()
         api = AppApi()
         window = webview.create_window(
             APP_TITLE,
