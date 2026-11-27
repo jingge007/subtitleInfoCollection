@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { api, type HistoryItem } from '@/api/bridge'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAppStore } from '@/stores/app'
+import { formatDateTime } from '@/utils/datetime'
 
 const app = useAppStore()
 const router = useRouter()
@@ -64,7 +65,7 @@ function goHistory(keyword = '') {
       </button>
       <button class="stat" type="button" @click="goHistory()">
         <div class="k">最近运行</div>
-        <div class="v small">{{ latest?.startedAt ?? '—' }}</div>
+        <div class="v small mono">{{ formatDateTime(latest?.startedAt) }}</div>
         <div class="d">点击查看全部记录</div>
       </button>
     </div>
@@ -96,7 +97,7 @@ function goHistory(keyword = '') {
           <div v-for="item in records" :key="item.id" class="list-row">
             <div class="grow">
               <div class="name">{{ item.year }} 年 · {{ item.limit }} 部</div>
-              <div class="path">{{ item.startedAt }}</div>
+              <div class="path mono">{{ formatDateTime(item.startedAt) }}</div>
             </div>
             <span class="app-tag" :class="item.failedCount > 0 ? 'fail' : 'ok'">
               {{ item.failedCount > 0 ? '部分失败' : '成功' }}

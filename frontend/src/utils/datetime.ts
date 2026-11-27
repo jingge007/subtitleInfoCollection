@@ -70,3 +70,16 @@ export function formatDuration(startedAt?: string | null, finishedAt?: string | 
   const minutes = Math.floor((seconds % 3600) / 60)
   return minutes ? `${hours} 小时 ${minutes} 分` : `${hours} 小时`
 }
+
+// 把毫秒级时间戳格式化为本地时间的 YYYY-MM-DD HH:mm:ss
+export function formatEpochMillis(value?: string | number | null): string {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return '—'
+  }
+  const parsed = new Date(numeric)
+  if (Number.isNaN(parsed.getTime())) {
+    return '—'
+  }
+  return formatDateTime(parsed.toISOString())
+}
