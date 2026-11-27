@@ -22,7 +22,7 @@ from .services.automation import run_classic_lines, run_todays_lines
 from .services.collection import run_collection
 from .services.parser import inspect_subtitle_files, run_parser
 from .tasks import ACTIVE_STATUSES, TaskContext, TaskRuntime
-from .updater import UpdateService
+from .updater import UpdateService, detect_run_mode
 
 
 def _project_root() -> Path:
@@ -50,9 +50,10 @@ class AppApi:
         self._parser = TaskContext("parser")
         self._automation = TaskContext("automation")
         self._control: CollectionControl | None = None
+        self._run_mode = detect_run_mode()
         self._updater = UpdateService(
             __version__,
-            enabled=bool(getattr(sys, "frozen", False)),
+            run_mode=self._run_mode,
         )
 
     def bind_window(self, window: Any) -> None:
@@ -70,6 +71,7 @@ class AppApi:
                 "programDir": str(_program_dir()),
                 "platform": sys.platform,
                 "frozen": bool(getattr(sys, "frozen", False)),
+                "runMode": self._run_mode,
             }
 
     def app_check_update(self) -> dict[str, Any]:

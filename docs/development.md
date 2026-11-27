@@ -92,13 +92,13 @@ cd ..
 
 ## 打包
 
-只生成便携目录：
+只生成便携目录（原始 onedir，不支持自更新）：
 
 ```powershell
 .\scripts\build_windows.ps1
 ```
 
-生成 Velopack 资产：
+生成 Velopack 资产，并把便携目录替换为可自更新的 Velopack 便携结构：
 
 ```powershell
 .\scripts\build_windows.ps1 -Pack
@@ -122,6 +122,24 @@ cd ..
 6. 删除 `.pyi`、`__pycache__`、`.dist-info` 等运行时无关文件。
 7. 检查产物不含 `.env`，扫描疑似密钥。
 8. `-Pack` 时准备 vpk 并生成 `Setup.exe`、`Portable.zip`、`nupkg`、`releases.win.json`。
+9. `-Pack` 时展开 `Portable.zip` 到便携目录：顶层为 `.portable`、`Update.exe` 与 Velopack 启动器，真实程序位于 `current\`。
+
+### 便携目录的两种形态
+
+| 打包参数 | 便携目录内容 | 自更新 |
+|---------|-------------|--------|
+| 不带 `-Pack` | PyInstaller onedir 原始产物（`字幕采集工具.exe` + `_internal`） | 不支持 |
+| 带 `-Pack` | Velopack 便携结构（`.portable` + `Update.exe` + 启动器 + `current\`） | 支持 |
+
+不带 `-Pack` 重新构建时，脚本会先清空便携目录，不会残留上一次的 Velopack 文件。
+
+Velopack 自更新依赖程序目录下的应用清单 `sq.version`：
+
+- 安装版：`%LOCALAPPDATA%\Velopack\SubtitleInfoCollection\current\sq.version`；
+- 便携解压版：`<解压目录>\current\sq.version`，`<解压目录>` 带 `.portable` 标记；
+- 原始 onedir 目录没有任何 Velopack 清单，调用 `UpdateManager` 会抛 `Could not auto-locate app manifest`。
+
+后端通过 `web/updater.py` 的 `detect_run_mode()` 识别这四种形态（`source` / `installed` / `portable` / `onedir`），不可更新的形态直接返回 `unsupported` 状态与中文说明，`app.info.runMode` 会把当前形态透传给前端展示。
 
 ### vpk 说明
 

@@ -14,6 +14,17 @@ let pollTimer = 0
 const currentVersion = computed(() => app.info?.version ?? '0.2.2')
 const update = computed(() => app.update)
 
+// 按运行形态展示自更新能力，避免用户把不可更新的形态误当成故障
+const runModeText = computed(() => {
+  const map: Record<string, string> = {
+    installed: '安装版（支持自更新）',
+    portable: '便携解压版（支持自更新）',
+    onedir: '便携目录（不支持自更新）',
+    source: '源码开发版',
+  }
+  return app.info ? (map[app.info.runMode] ?? app.info.runMode) : '加载中…'
+})
+
 const statusText = computed(() => {
   const map: Record<string, string> = {
     idle: '尚未检查',
@@ -24,6 +35,7 @@ const statusText = computed(() => {
     ready: '等待重启安装',
     restarting: '正在重启',
     error: '检查或更新失败',
+    unsupported: '当前运行方式不支持更新',
   }
   return update.value ? (map[update.value.status] ?? update.value.status) : '尚未检查'
 })
@@ -158,7 +170,14 @@ async function deleteOutputs() {
           <el-button v-else-if="update?.status === 'ready'" type="primary" @click="restart">
             重启并安装
           </el-button>
-          <el-button v-else :loading="app.checking" @click="checkUpdate">检查更新</el-button>
+          <el-button
+            v-else
+            :loading="app.checking"
+            :disabled="update?.status === 'unsupported'"
+            @click="checkUpdate"
+          >
+            检查更新
+          </el-button>
         </div>
       </div>
 
@@ -209,7 +228,7 @@ async function deleteOutputs() {
         </div>
         <div class="app-kv">
           <span class="k">运行模式</span>
-          <span class="v">{{ app.info?.frozen ? '便携安装版' : '源码开发版' }}</span>
+          <span class="v">{{ runModeText }}</span>
         </div>
         <div class="path-actions">
           <el-button size="small" @click="api.shellOpenPath(app.info?.dataDir ?? '')">打开数据目录</el-button>
@@ -223,7 +242,7 @@ async function deleteOutputs() {
       <div class="tips">
         <div>· 安装包、Portable 包与 <code>releases.win.json</code> 都发布在公开 GitHub Releases，客户端匿名读取。</div>
         <div>· <code>.env</code>、SQLite 数据、输出文件与 WebView2 缓存均位于用户目录，更新只替换程序目录。</div>
-        <div>· 开发模式不会实际安装更新；请使用打包后的 Portable 版本验证升级流程。</div>
+        <div>· 自更新仅在安装版与便携解压版可用；便携目录原始产物与源码开发版会提示「当前运行方式不支持更新」。</div>
       </div>
     </div>
   </div>

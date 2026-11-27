@@ -14,6 +14,7 @@ const APP_INFO: AppInfo = {
   programDir: '%LocalAppData%\\SubtitleInfoCollection\\current',
   platform: 'win32',
   frozen: false,
+  runMode: 'source',
 }
 
 let updateState: UpdateState = {

@@ -1,5 +1,21 @@
 # 变更记录
 
+## 未发布
+
+### 修复
+
+- 修复「检查更新」在便携目录原始产物上必然失败的问题：Velopack 需要应用清单 `sq.version` 才能定位程序，原产物目录既无 `Update.exe` 也无清单，会抛 `Could not auto-locate app manifest`。
+
+### 变更
+
+- `-Pack` 打包时把 `SubtitleInfoCollection-win-Portable.zip` 展开到便携目录，便携目录变为 `.portable` + `Update.exe` + Velopack 启动器 + `current\` 结构，可正常自更新。
+- 后端新增运行形态识别（`source` / `installed` / `portable` / `onedir`），不可更新的形态直接返回 `unsupported` 状态与中文说明，不再抛出 Velopack 英文异常。
+- `app.info` 新增 `runMode` 字段，设置页「运行模式」区分安装版、便携解压版、便携目录与源码开发版，并据此禁用「检查更新」按钮。
+
+### 维护
+
+- `outputs/` 会话产物全部移出 Git 跟踪，`.gitignore` 不再放行 `outputs/ui-wireframe`。
+
 ## 0.2.2
 
 ### 新增

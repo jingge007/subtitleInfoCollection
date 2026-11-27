@@ -29,6 +29,8 @@ outputs/                  会话产物、截图、原型
 work/                     临时脚本与中间文件（不入库）
 ```
 
+`outputs/` 与 `work/` 都属于本地会话产物，不纳入 Git 跟踪。
+
 ## 架构
 
 ```text
@@ -137,7 +139,7 @@ cd ..
 
 ## 打包
 
-只生成便携目录：
+只生成便携目录（原始 onedir 产物，不支持自更新）：
 
 ```powershell
 .\scripts\build_windows.ps1
@@ -145,7 +147,7 @@ cd ..
 
 输出：`dist\字幕采集工具\字幕采集工具.exe`。
 
-生成 Velopack 发布资产：
+生成 Velopack 发布资产，并把便携目录替换为可自更新的 Velopack 便携结构：
 
 ```powershell
 .\scripts\build_windows.ps1 -Pack
@@ -165,9 +167,23 @@ cd ..
 3. 运行 PyInstaller onedir；
 4. 复制并精简 Playwright 无头浏览器；
 5. 校验产物不含 `.env` 与疑似密钥；
-6. `-Pack` 时自动准备本地 .NET 8 运行时与 `vpk`，生成 Velopack 资产。
+6. `-Pack` 时自动准备本地 .NET 8 运行时与 `vpk`，生成 Velopack 资产；
+7. `-Pack` 时把 `SubtitleInfoCollection-win-Portable.zip` 展开到便携目录，便携目录变为 `.portable` + `Update.exe` + 启动器 + `current\` 结构。
 
 `vpk` 不需要全局 .NET SDK；首次打包会把运行时和工具下载到 `scripts/tools/`（该目录不入库）。
+
+## 运行形态与自更新
+
+自更新依赖 Velopack 的应用清单 `sq.version`，只有被 Velopack 注册过的运行形态才具备该能力：
+
+| 运行形态 | 目录结构 | 自更新 |
+|---------|---------|--------|
+| 安装版 | `Setup.exe` 安装到 `%LOCALAPPDATA%\Velopack\SubtitleInfoCollection` | 支持 |
+| 便携解压版 | 解压 `SubtitleInfoCollection-win-Portable.zip`，运行顶层启动器 | 支持 |
+| 便携目录原始产物 | `build_windows.ps1`（不带 `-Pack`）生成的 onedir 目录 | 不支持 |
+| 源码开发版 | `.\scripts\run_dev.ps1` | 不支持 |
+
+程序会在「设置与维护 → 运行模式」显示当前形态；形态不支持自更新时，「检查更新」按钮会禁用并给出中文说明，不会再抛出 Velopack 的英文异常。
 
 ## 更新与发布
 
@@ -200,6 +216,7 @@ https://github.com/jingge007/subtitleInfoCollection
 
 - 如果曾经在聊天、日志、截图或旧提交中暴露过 Token/密码，应在对应平台轮换。
 - 不要把真实 `.env`、Cookie、抓包结果、账号密码放进 `outputs/`、`work/` 或提交历史。
+- `outputs/` 属于会话产物，`.gitignore` 已全量忽略，不要提交截图与原型文件。
 - 新增配置项时，密钥键在 `.env.example` 中必须保持空值，并补充中文说明。
 
 ## 相关文档

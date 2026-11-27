@@ -53,6 +53,7 @@ def test_app_info_reports_version_and_paths(app, tmp_path):
     assert info["dataDir"] == str((tmp_path / "data").resolve())
     assert info["platform"] == sys.platform
     assert info["frozen"] is False
+    assert info["runMode"] == "source"
 
 
 def test_config_list_marks_secrets_and_save_writes_env(app, tmp_path):
