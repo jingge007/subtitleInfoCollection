@@ -156,7 +156,11 @@ export interface AppInfo {
   programDir: string
   platform: string
   frozen: boolean
+  runMode: RunMode
 }
+
+// 运行形态：源码开发版 / Velopack 安装版 / Velopack 便携解压版 / 原始 onedir 产物
+export type RunMode = 'source' | 'installed' | 'portable' | 'onedir'
 
 export interface AppStatus {
   collector: string
@@ -174,6 +178,7 @@ export type UpdateStatus =
   | 'ready'
   | 'restarting'
   | 'error'
+  | 'unsupported'
 
 export interface UpdateState {
   status: UpdateStatus

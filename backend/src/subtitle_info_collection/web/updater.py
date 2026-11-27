@@ -1,17 +1,60 @@
 from __future__ import annotations
 
+import sys
 import threading
+from pathlib import Path
 from typing import Any
 
 REPOSITORY_URL = "https://github.com/jingge007/subtitleInfoCollection"
+
+# 运行形态：源码开发版 / Velopack 安装版 / Velopack 便携解压版 / 原始 onedir 产物
+RUN_MODE_SOURCE = "source"
+RUN_MODE_INSTALLED = "installed"
+RUN_MODE_PORTABLE = "portable"
+RUN_MODE_ONEDIR = "onedir"
+
+# 具备 Velopack 自更新能力的运行形态
+UPDATE_CAPABLE_MODES = (RUN_MODE_INSTALLED, RUN_MODE_PORTABLE)
+
+# 不具备自更新能力时的中文说明
+UNSUPPORTED_NOTES = {
+    RUN_MODE_SOURCE: "源码开发模式不检查更新，请使用打包后的安装版或便携解压版验证升级流程。",
+    RUN_MODE_ONEDIR: (
+        "当前运行的是未注册的便携目录原始产物，Velopack 未安装，无法检查更新。"
+        "请改用安装版（Setup.exe）或便携解压版（Portable.zip）后重试。"
+    ),
+}
+
+# Velopack 定位应用清单失败时的原始异常特征
+MANIFEST_ERROR_HINTS = ("not properly installed", "auto-locate", "app manifest")
+
+
+def detect_run_mode() -> str:
+    """识别当前运行形态，判断是否具备 Velopack 自更新能力。"""
+    if not getattr(sys, "frozen", False):
+        return RUN_MODE_SOURCE
+    exe_dir = Path(sys.executable).resolve().parent
+    # Velopack 安装版与便携解压版都会在程序目录放置应用清单 sq.version
+    if not (exe_dir / "sq.version").exists():
+        return RUN_MODE_ONEDIR
+    # 便携解压版根目录带 .portable 标记，安装版没有
+    if (exe_dir.parent / ".portable").exists():
+        return RUN_MODE_PORTABLE
+    return RUN_MODE_INSTALLED
 
 
 class UpdateService:
     """封装 Velopack 更新检查、下载与应用更新流程。"""
 
-    def __init__(self, current_version: str, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        current_version: str,
+        enabled: bool = True,
+        run_mode: str | None = None,
+    ) -> None:
         self.current_version = current_version
-        self.enabled = enabled
+        self.run_mode = run_mode if run_mode is not None else detect_run_mode()
+        self.enabled = enabled and self.run_mode in UPDATE_CAPABLE_MODES
         self._lock = threading.Lock()
         self._manager: Any = None
         self._pending: Any = None
@@ -45,12 +88,14 @@ class UpdateService:
             with self._lock:
                 self._pending = None
                 self._state.update(
-                    status="latest",
+                    status="unsupported",
                     available=False,
                     latestVersion=self.current_version,
-                    notes="源码开发模式不检查更新，请使用打包后的 Portable 版本验证。",
+                    notes="",
                     progress=0,
-                    error="",
+                    error=UNSUPPORTED_NOTES.get(
+                        self.run_mode, "当前运行形态不支持自更新。"
+                    ),
                 )
             return self.state()
         with self._lock:
@@ -86,12 +131,14 @@ class UpdateService:
                     available=False,
                     latestVersion="",
                     notes="",
-                    error=f"检查更新失败：{exc}",
+                    error=self._describe_error(exc),
                 )
         return self.state()
 
     # 下载已发现的新版本并回调进度
     def download(self) -> None:
+        if not self.enabled:
+            raise RuntimeError("当前运行形态不支持自更新")
         with self._lock:
             info = self._pending
         if info is None:
@@ -117,6 +164,8 @@ class UpdateService:
 
     # 退出当前进程并重启到新版本
     def apply_and_restart(self) -> None:
+        if not self.enabled:
+            raise RuntimeError("当前运行形态不支持自更新")
         with self._lock:
             info = self._pending
             self._state.update(status="restarting")
@@ -128,6 +177,18 @@ class UpdateService:
             with self._lock:
                 self._state.update(status="error", error=f"安装更新失败：{exc}")
             raise
+
+    # 把 Velopack 原始异常翻译成中文提示
+    @staticmethod
+    def _describe_error(exc: Exception) -> str:
+        text = str(exc)
+        lowered = text.lower()
+        if any(hint in lowered for hint in MANIFEST_ERROR_HINTS):
+            return (
+                "Velopack 未能识别当前程序（缺少应用清单 sq.version），"
+                "请改用安装版（Setup.exe）或便携解压版（Portable.zip）运行。"
+            )
+        return f"检查更新失败：{exc}"
 
     # 兼容 Velopack 不同版本的进度回调参数
     @staticmethod

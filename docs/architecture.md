@@ -62,7 +62,7 @@ backend/
 
 | 前端接口 | Python 方法 | 返回 |
 |---|---|---|
-| `app.info` | `app_info` | 版本、数据目录、配置路径、程序目录 |
+| `app.info` | `app_info` | 版本、数据目录、配置路径、程序目录、运行形态 `runMode` |
 | `app.checkUpdate` | `app_check_update` | 更新状态 |
 | `app.updateState` | `app_update_state` | 当前更新状态快照 |
 | `app.downloadUpdate` | `app_download_update` | 无 |
@@ -145,27 +145,37 @@ idle → checking → latest
 ## 更新流程
 
 1. `main.py` 在创建窗口前执行 `velopack.App().run()`。
-2. 设置页调用 `app.checkUpdate`。
-3. `UpdateService` 通过 `GithubSource(REPOSITORY_URL)` 匿名读取公开 Releases。
-4. 有新版本时前端显示版本号、更新说明与「立即更新」。
-5. 下载完成状态为 `ready`，用户点击重启安装。
-6. Velopack 替换程序目录并重启。
+2. `web/updater.py` 的 `detect_run_mode()` 识别运行形态：`source`（源码）、`installed`（安装版）、`portable`（便携解压版）、`onedir`（便携目录原始产物）。
+3. 设置页调用 `app.checkUpdate`；形态不支持自更新时直接返回 `unsupported` 状态与中文说明，不请求 GitHub。
+4. `UpdateService` 通过 `GithubSource(REPOSITORY_URL)` 匿名读取公开 Releases。
+5. 有新版本时前端显示版本号、更新说明与「立即更新」。
+6. 下载完成状态为 `ready`，用户点击重启安装。
+7. Velopack 替换程序目录并重启。
 
 匿名 GitHub API 有每小时 60 次的单 IP 限制；检查失败时界面显示错误，不影响本地功能。
+
+`runMode` 由 `app.info` 返回，前端在「设置与维护 → 运行模式」展示，并据此禁用「检查更新」按钮。
 
 ## 打包结构
 
 ```text
 dist/
-  字幕采集工具/
-    字幕采集工具.exe
-    _internal/
-      webui/                 frontend/dist
-      assets/                head_logo.ico
-      .env.example           配置模板
-      webview/               pywebview + WebView2 DLL
-      playwright/            Playwright driver + 无头浏览器
+  字幕采集工具/                便携目录
+    .portable                  便携解压版标记（-Pack 时才有）
+    Update.exe                 Velopack 更新器（-Pack 时才有）
+    字幕采集工具.exe             Velopack 启动器（-Pack 时才有）
+    current/                   实际程序目录（-Pack 时才有）
+      字幕采集工具.exe
+      sq.version               Velopack 应用清单
+      _internal/
+        webui/                 frontend/dist
+        assets/                head_logo.ico
+        .env.example           配置模板
+        webview/               pywebview + WebView2 DLL
+        playwright/            Playwright driver + 无头浏览器
   releases/                  Velopack 资产
 ```
+
+不带 `-Pack` 时便携目录只有 PyInstaller onedir 原始产物，没有 `sq.version`，因此不具备自更新能力。
 
 PyInstaller spec 明确不打包真实 `.env`；构建脚本会再次检查产物并扫描疑似密钥。

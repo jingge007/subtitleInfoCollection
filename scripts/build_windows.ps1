@@ -254,6 +254,53 @@ function Invoke-VpkPack {
   }
 }
 
+# 把 Velopack Portable 压缩包展开成便携目录，使便携目录成为可自更新的 Velopack 应用
+function Install-PortablePackage {
+  param(
+    [Parameter(Mandatory = $true)][string]$PortableZipPath,
+    [Parameter(Mandatory = $true)][string]$PackagePath,
+    [Parameter(Mandatory = $true)][string]$DistRoot
+  )
+
+  if (!(Test-Path $PortableZipPath)) {
+    throw "缺少 Portable 压缩包：$PortableZipPath"
+  }
+
+  $running = Get-Process -Name $AppName -ErrorAction SilentlyContinue
+  if ($running) {
+    throw "检测到正在运行的 $AppName.exe，请先关闭后再重新打包（便携目录将被整体替换）。"
+  }
+
+  # 在同一卷内暂存，避免跨盘复制大体积产物
+  $staging = Join-Path $DistRoot "portable-staging"
+  Remove-SafeDirectory $staging $DistRoot
+  New-Item -ItemType Directory -Path $staging -Force | Out-Null
+  try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($PortableZipPath, $staging)
+
+    $required = @(
+      ".portable",
+      "Update.exe",
+      "current\sq.version",
+      "current\$AppName.exe"
+    )
+    foreach ($item in $required) {
+      if (!(Test-Path (Join-Path $staging $item))) {
+        throw "Portable 压缩包结构不完整，缺少：$item"
+      }
+    }
+
+    Remove-SafeDirectory $PackagePath $DistRoot
+    New-Item -ItemType Directory -Path $PackagePath -Force | Out-Null
+    Get-ChildItem -LiteralPath $staging -Force | ForEach-Object {
+      Move-Item -LiteralPath $_.FullName -Destination $PackagePath -Force
+    }
+  } finally {
+    Remove-SafeDirectory $staging $DistRoot
+  }
+}
+
 if (!(Test-Path $VenvPython)) {
   Invoke-CheckedCommand $Python @("-m", "venv", (Join-Path $Root ".venv"))
 }
@@ -362,7 +409,9 @@ if ($secretHits) {
   throw "产物文本中发现疑似密钥：$($first.Path):$($first.LineNumber)"
 }
 
-Write-Host "便携目录打包完成：$PackagePath"
+if (!$Pack) {
+  Write-Host "便携目录打包完成（原始 onedir，不支持自更新）：$PackagePath"
+}
 
 if ($Pack) {
   $vpk = Resolve-Vpk
@@ -381,6 +430,14 @@ if ($Pack) {
       throw "缺少发布资产：$assetPath"
     }
   }
+
+  Write-Host "展开 Portable 压缩包到便携目录..."
+  Install-PortablePackage `
+    -PortableZipPath (Join-Path $ReleasePath "$PackId-win-Portable.zip") `
+    -PackagePath $PackagePath `
+    -DistRoot $DistRoot
+
+  Write-Host "便携目录打包完成（Velopack 便携版，支持自更新）：$PackagePath"
   Write-Host "Velopack 发布目录：$ReleasePath"
   Get-ChildItem -LiteralPath $ReleasePath | Select-Object Name, Length, LastWriteTime
 }
