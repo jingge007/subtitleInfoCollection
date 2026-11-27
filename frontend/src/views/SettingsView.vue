@@ -11,7 +11,7 @@ const downloading = ref(false)
 const actionError = ref('')
 let pollTimer = 0
 
-const currentVersion = computed(() => app.info?.version ?? '0.2.2')
+const currentVersion = computed(() => app.info?.version ?? '0.2.3')
 const update = computed(() => app.update)
 
 // 按运行形态展示自更新能力，避免用户把不可更新的形态误当成故障

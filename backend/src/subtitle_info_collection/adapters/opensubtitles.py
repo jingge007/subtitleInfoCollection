@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 
+from .. import __version__
 from ..errors import CollectorError, ErrorType
 from ..models import (
     DownloadedPayload,
@@ -24,7 +25,7 @@ class OpenSubtitlesProvider:
         username: str = "",
         password: str = "",
         base_url: str = "https://api.opensubtitles.com/api/v1",
-        user_agent: str = "subtitleInfoCollection v0.1",
+        user_agent: str = f"subtitleInfoCollection v{__version__}",
         timeout: float = 30,
         proxy: str | None = None,
     ) -> None:
