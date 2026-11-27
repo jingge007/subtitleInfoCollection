@@ -1,266 +1,210 @@
 # subtitleInfoCollection
 
-Windows 桌面字幕信息自动采集工具，用于采集电影字幕候选、下载最佳字幕，并解析本地 SRT/ASS 双语字幕文件。
+Windows 桌面字幕信息采集工具：TMDb 电影榜单、多字幕源搜索下载、本地 SRT/ASS 解析、SQLite 历史，以及 33 台词相关自动化。
 
-## 功能概览
+## 技术栈
 
-- 从 TMDb 获取指定年份 Top 电影。
-- 从 SubHD、SubDL、ASSRT、OpenSubtitles 搜索字幕候选。
-- 校验字幕格式、语言和文件大小，优先筛选真实文件大于 100KB 的中英双语 ASS/SRT 字幕。
-- 下载最佳字幕并打包为 ZIP。
-- 解析本地 SRT/ASS 文件，导出电影 JSON 和字幕 JSON。
-- 使用 SQLite 保存采集历史和缓存。
-- 提供 PySide6 桌面界面，支持复制日志、清空历史、删除采集输出文件。
+| 层 | 技术 |
+|---|---|
+| 桌面外壳 | Python 3.12+、pywebview 6.2、WebView2 |
+| 后端 | Python asyncio、httpx、Playwright、SQLite |
+| 前端 | Vue 3、TypeScript、Vite、Element Plus、Pinia、vue-router |
+| 打包 | PyInstaller onedir、Velopack Portable |
+| 测试 | pytest、Ruff、vue-tsc |
+
+前端与后端分目录维护：
+
+```text
+frontend/                 Vue 3 + TypeScript 前端工程
+backend/                  Python 后端、测试、资源与打包 spec
+  src/subtitle_info_collection/
+    adapters/             外部 API/站点交互
+    engines/              解码、打分、解压、OCR、分词等纯逻辑
+    automation/           33 台词自动化
+    web/                  pywebview 外壳、js_api、任务与更新服务
+  tests/                  pytest
+scripts/                  开发、打包、发布辅助脚本
+docs/                     架构与开发文档
+outputs/                  会话产物、截图、原型
+work/                     临时脚本与中间文件（不入库）
+```
+
+## 架构
+
+```text
+Vue 3 页面
+  ↕ window.pywebview.api（请求-响应）
+AppApi（web/api.py）
+  ↕
+web/services（采集 / 解析 / 自动化）
+  ↕
+orchestrator / local_parser / automation
+  ↕
+adapters + engines + storage
+```
+
+- 业务逻辑只放在 `web/services` 与既有 Python 模块，页面不直连网络。
+- 长任务运行在专用 asyncio 线程，页面用 500ms 轮询任务快照与增量日志。
+- 日志使用统一滚动控制台，默认跟随最新输出，手动上滚后可一键回到最新。
+- 顶栏图钉按钮可切换窗口置顶，状态保存在 WebView 本地存储中。
+- 配置、数据库、输出目录都在用户目录，更新只替换程序目录。
+
+更完整的接口与状态机见 `docs/architecture.md`。
 
 ## 环境准备
 
-推荐使用 Python 3.12 或更高版本。
+- Windows 10/11 x64
+- Python 3.12 或更高版本
+- Node.js 20 或更高版本
+- Microsoft Edge WebView2 Runtime（Windows 10/11 通常已预装）
+
+首次准备：
 
 ```powershell
-cd D:\资料\subtitleInfoCollection
+cd <项目根目录>
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e "backend[dev]"
 python -m playwright install chromium
-copy .env.example .env
+
+cd frontend
+npm ci
+cd ..
+
+Copy-Item .env.example .env
 ```
 
-也可以直接运行开发脚本，它会自动创建虚拟环境并安装依赖：
+`requirements.txt` 仅保留兼容入口，依赖以 `backend/pyproject.toml` 为准。
+
+## 本地运行
+
+一键启动 Vite 与 pywebview：
 
 ```powershell
 .\scripts\run_dev.ps1
 ```
 
-## 配置 .env
-
-首次运行前，把 `.env.example` 复制为 `.env`，然后只在本机 `.env` 中填写真实密钥。  
-配置项以仓库根目录 `.env.example` 为准；修改示例文件时须同步更新本节说明。
-
-### 配置项一览
-
-```dotenv
-# TMDb / 字幕源
-TMDB_TOKEN=
-ASSRT_TOKEN=
-ASSRT_API_BASE_URL=https://api.assrt.net/v1
-ASSRT_SITE_BASE_URL=https://2.assrt.net
-SUBDL_API_KEY=
-SUBDL_BASE_URL=https://api.subdl.com/api/v1
-SUBDL_DOWNLOAD_BASE_URL=https://dl.subdl.com
-SUBDL_LANGUAGES=ZH
-SUBDL_INCLUDE_TRADITIONAL=false
-OPENSUBTITLES_API_KEY=
-OPENSUBTITLES_USERNAME=
-OPENSUBTITLES_PASSWORD=
-OPENSUBTITLES_BASE_URL=https://api.opensubtitles.com/api/v1
-OPENSUBTITLES_USER_AGENT=subtitleInfoCollection v0.1
-
-# 33 台词自动化 / 翻译
-TODAYS_LINES_USERNAME=
-TODAYS_LINES_PASSWORD=
-TODAYS_LINES_TOKEN=
-TODAYS_LINES_TOKEN_TIME=
-BAIDU_TRANSLATE_APP_ID=
-BAIDU_TRANSLATE_SECRET=
-
-# 采集策略与 SubHD
-SUBTITLE_PROVIDER_PRIORITY=subhd,assrt,opensubtitles,subdl
-SUBTITLE_PROVIDER_DISABLED=
-SUBTITLE_REQUEST_INTERVAL_MS=8000
-SUBTITLE_MOVIE_CONCURRENCY=2
-SUBTITLE_MIN_BILINGUAL_RATIO=0.70
-SUBHD_CAPTCHA_OCR_ENABLED=true
-SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE=0.85
-SUBHD_CAPTCHA_OCR_MAX_ATTEMPTS=
-SUBHD_SEARCH_TIMEOUT=120
-PROVIDER_SEARCH_TIMEOUT=90
-SUBHD_DOWNLOAD_TIMEOUT=180
-PROVIDER_DOWNLOAD_TIMEOUT=60
-CAPTCHA_SOUND_ENABLED=true
-
-# 目录与代理
-SUBTITLE_COLLECTION_PACKAGE_DIST_DIR=
-SUBTITLE_COLLECTION_DATA_DIR=
-HTTP_PROXY=
-HTTPS_PROXY=
-```
-
-### 配置说明
-
-- `TMDB_TOKEN`：TMDb Bearer Token，用于指定年份电影榜单采集，也用于本地字幕解析匹配电影信息；留空则电影榜单采集不可用。
-- `ASSRT_TOKEN`：ASSRT API 令牌；填写后启用 ASSRT 搜索和下载，留空判定为未配置。
-- `ASSRT_API_BASE_URL`：ASSRT API 基础地址；默认 `https://api.assrt.net/v1`。仅网页搜索失败时作搜索兜底；主域不通可改为 `https://api.makedie.me/v1`。程序会自动 failover（备用域 HTTPS → HTTP，且备用域 HTTP 优先于主域 HTTP）；HTTPS 证书主机名不匹配或连接失败会快切，HTTP 5xx（如 503）会继续试下一候选。当前环境下 `http://api.makedie.me/v1` 常为 API 可用兜底。ASSRT API 按 5 次/分钟限速。
-- `ASSRT_SITE_BASE_URL`：ASSRT 网页站点基础地址；默认 `https://2.assrt.net`。搜索与下载主路径走站点详情页「下载字幕」链接；不通时可改 `https://assrt.net`。
-- `SUBDL_API_KEY`：SubDL 官方 API 密钥；填写后启用 SubDL，留空判定为未配置。
-- `SUBDL_BASE_URL` / `SUBDL_DOWNLOAD_BASE_URL`：SubDL 搜索与下载基础地址；通常保持默认。
-- `SUBDL_LANGUAGES`：SubDL 搜索语言，逗号分隔；默认 `ZH` 以减少纯英候选空转，最终仍以下载后中英双语校验为准。
-- `SUBDL_INCLUDE_TRADITIONAL`：是否允许 SubDL 搜索繁体候选；默认 `false`。
-- `OPENSUBTITLES_API_KEY`：OpenSubtitles 搜索用 API Key；留空判定为未配置。
-- `OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD`：OpenSubtitles 下载所需账号密码。
-- `OPENSUBTITLES_BASE_URL` / `OPENSUBTITLES_USER_AGENT`：API 地址与 User-Agent；User-Agent 建议包含应用名与版本。
-- `TODAYS_LINES_USERNAME` / `TODAYS_LINES_PASSWORD`：33 台词自动化登录账号密码；仅自动化功能使用，本地 token 不可用时才用密码登录。
-- `TODAYS_LINES_TOKEN` / `TODAYS_LINES_TOKEN_TIME`：登录成功后由程序自动写入的缓存 token 与时间戳；手工可留空。
-- `BAIDU_TRANSLATE_APP_ID` / `BAIDU_TRANSLATE_SECRET`：百度翻译开放平台凭证，用于自动化脚本补全英文字幕（唯一翻译通道）；留空则跳过英文补全。
-- `SUBTITLE_PROVIDER_PRIORITY`：字幕源启用列表与搜索优先级，逗号分隔，支持 `subhd`、`assrt`、`opensubtitles`、`subdl`，越靠前越优先。仅列出的源会出现在采集页勾选框；未列出的源隐藏且不参与采集。
-- `SUBTITLE_PROVIDER_DISABLED`：禁用的字幕源，逗号分隔；留空表示不额外禁用。
-- `SUBTITLE_REQUEST_INTERVAL_MS`：字幕源请求间隔（毫秒），降低限流/验证码概率；过低值会被程序限制到安全下限（不低于 8000）。SubHD 若频繁验证码可在本地调高到 12000～15000。遇到 429 限流仍可能本轮熔断该源；网络不可达仅在同一部电影内跳过，下一部会重新尝试。
-- `SUBTITLE_MOVIE_CONCURRENCY`：同时处理的电影数（1～4）；默认 `2` 为有限并发，`1` 为串行（旧行为）。
-- `SUBTITLE_MIN_BILINGUAL_RATIO`：下载后双语条目最低占比（0.0–1.0）；`0.70` 表示至少 70% 有效条目须同时含简体中文与英文。
-- `SUBHD_CAPTCHA_OCR_ENABLED`：是否启用 SubHD 验证码辅助识别；`true` 尝试自动识别，`false` 需人工输入。图片 OCR 需本机安装对应 OCR 依赖与 Tesseract。
-- `SUBHD_CAPTCHA_AUTO_SUBMIT_MIN_CONFIDENCE`：验证码自动提交最低置信度（0.0–1.0）；低于该值等待人工确认。
-- `SUBHD_CAPTCHA_OCR_MAX_ATTEMPTS`：OCR 最大尝试次数；留空则按预处理 × PSM × 白名单组合自动计算（通常约 30–50 次）。
-- `SUBHD_SEARCH_TIMEOUT`：SubHD 单次搜索超时（秒）；建议不低于 60，留空默认 120。
-- `PROVIDER_SEARCH_TIMEOUT`：非 SubHD 源（SubDL、ASSRT、OpenSubtitles）单次搜索超时（秒）；留空默认 90。
-- `SUBHD_DOWNLOAD_TIMEOUT`：SubHD 单次下载硬超时（秒）；超时后停止多域名尝试并换候选/换源；留空默认 180。
-- `PROVIDER_DOWNLOAD_TIMEOUT`：非 SubHD 源单次下载硬超时（秒）；留空默认 60。
-- `CAPTCHA_SOUND_ENABLED`：验证码弹出时是否播放系统提示音；即使静默仍会托盘通知与任务栏闪烁。
-- `SUBTITLE_COLLECTION_PACKAGE_DIST_DIR`：Windows 打包产物输出目录，只影响 `scripts/build_windows.ps1` / `字幕采集工具.spec`；留空默认 `项目目录/dist/字幕采集工具`。可填最终目录（如 `D:\软件\字幕采集工具`），或父级目录（如 `D:\软件`，则输出为 `D:\软件\字幕采集工具`）；相对路径按项目根解析。
-- `SUBTITLE_COLLECTION_DATA_DIR`：运行数据目录（字幕输出、解析结果、本地数据库）；留空默认使用当前用户目录下的 `subtitleInfoCollection`。
-- `HTTP_PROXY` / `HTTPS_PROXY`：HTTP/HTTPS 代理，例如 `http://127.0.0.1:7890`；留空表示不使用代理。
-
-界面「配置项」页可查看并修改全部 `.env` 配置（含密钥与账号）；打开页时与 `.env` 对齐，保存后写回 `.env`（保留注释）。权威存储仍是本地 `.env`，密钥勿提交仓库。  
-「设置与维护」页仅用于重置历史、删除输出等数据维护。  
-开发运行：`.\scripts\run_dev.ps1`。打包：`.\scripts\build_windows.ps1`（会读取 `SUBTITLE_COLLECTION_PACKAGE_DIST_DIR`）。
-## 启动应用
-
-方式一：开发脚本启动。
+也可以分开启动：
 
 ```powershell
-.\scripts\run_dev.ps1
+# 终端 1：前端
+cd frontend
+npm run dev
+
+# 终端 2：桌面壳
+.\.venv\Scripts\python.exe -m subtitle_info_collection --dev-url http://127.0.0.1:5173
 ```
 
-方式二：手动启动。
+只调试页面时，可直接在浏览器打开 `http://127.0.0.1:5173`。`frontend/src/api/bridge.ts` 检测不到 `window.pywebview` 时会启用 `mock.ts`，9 个页面都能独立操作。
+
+本地验证生产构建：
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python -m subtitle_info_collection
+cd frontend
+npm run build
+cd ..
+.\.venv\Scripts\python.exe -m subtitle_info_collection
 ```
 
-## 界面操作
+## 配置
 
-### 采集任务
+- 源码运行：读取仓库根目录 `.env`。
+- 打包运行：读取 `%APPDATA%\subtitleInfoCollection\.env`。
+- 旧版升级：首次启动若新位置不存在、旧版 exe 目录存在 `.env`，会复制到 APPDATA，旧文件保留。
+- 数据目录：默认 `~/subtitleInfoCollection`，可用 `SUBTITLE_COLLECTION_DATA_DIR` 覆盖。
+- WebView2 缓存：`%LOCALAPPDATA%\subtitleInfoCollection\webview`。
 
-1. 打开“采集任务”页。
-2. 设置年份和 Top 数量。
-3. 选择字幕源（采集时会自动下载字幕）。
-4. 点击“开始采集”。
-5. 下载校验会检查解压后的真实字幕文件，低于 100KB 的 ASS/SRT 会判定为无效电影字幕。
-6. 采集过程中可查看进度、结果摘要和日志。
-7. 点击“复制日志”可以一键复制当前采集日志。
+`.env` 禁止提交，`.env.example` 只保留空值或安全默认值。修改配置项时同步更新 `backend/src/subtitle_info_collection/config.py`、`backend/tests/test_config_checks.py`、`.env.example` 与本 README。
 
-采集使用的 Token、请求间隔、API 地址、代理和字幕源优先级均来自 `.env`。
-
-### 字幕解析
-
-1. 打开“字幕解析”页。
-2. 点击“选择 SRT/ASS 文件”。
-3. 选择一个或多个本地字幕文件，文件必须是 `.srt` 或 `.ass`，且真实文件大小不低于 100KB。
-4. 解析完成后，列表会展示完整文件路径、电影信息、原始字幕数量、导出字幕数量和匹配关键词。
-5. 解析产物写入 `数据目录/parsed`。
-
-### 历史记录
-
-打开“历史记录”页可查看最近的采集任务，包括年份、Top 数量、开始时间、结束时间和输出目录，时间按 `YYYY-MM-DD HH:mm:ss` 展示。
-
-### 配置项
-
-打开“配置项”页可以：
-
-- 按分组编辑全部 `.env` 配置（密钥与账号、字幕源策略、SubHD/验证码、网络与接口、本机与打包）。
-- 点击“保存全部”写回 `.env`；点击“重新加载”丢弃未保存编辑并重新对齐 `.env`。
-- 在“概览”查看配置预检状态。
-
-### 设置和维护
-
-打开“设置与维护”页可以：
-
-- 点击“重置历史”清空采集历史记录，保留输出文件。
-- 点击“删除输出文件”删除 `数据目录/output`，并同时清空采集历史记录。
-
-数据目录、验证码提示音等运行配置请在“配置项”中修改。  
-“删除输出文件”不会删除 `数据目录/parsed`，也不会删除数据库文件、电影缓存或字幕候选缓存。
-
-## 输出目录
-
-采集任务每次都会在数据目录下创建独立输出目录：
-
-```text
-数据目录/
-  subtitle_info_collection.sqlite3
-  output/
-    YYYYMMDDHHMMSS-YYYY-topN/
-      *.srt
-      *.ass
-  parsed/
-    YYYYMMDD-HHMMSS-movies.json
-    YYYYMMDD-HHMMSS-subtitles.json
-```
+完整配置说明以 `.env.example` 为权威来源。
 
 ## 测试
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-pytest
+# 后端
+cd backend
+..\.venv\Scripts\python.exe -m pytest -q
+..\.venv\Scripts\python.exe -m ruff check src tests
+cd ..
+
+# 前端
+cd frontend
+npm run typecheck
+npm run build
+cd ..
 ```
 
-如果没有激活虚拟环境，也可以直接使用虚拟环境中的 Python：
+## 打包
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest
-```
-
-## Windows 打包
-
-运行打包脚本：
+只生成便携目录：
 
 ```powershell
 .\scripts\build_windows.ps1
 ```
 
-脚本会执行：
+输出：`dist\字幕采集工具\字幕采集工具.exe`。
 
-- 创建 `.venv`，如果不存在。
-- 升级 pip。
-- 安装项目和开发依赖。
-- 安装 Playwright Chromium。
-- 使用 PyInstaller 生成 Windows 桌面程序。
-
-打包完成后，默认程序位于：
-
-```text
-dist\字幕采集工具
-```
-
-可通过 `.env` 中的 `SUBTITLE_COLLECTION_PACKAGE_DIST_DIR` 指定打包输出目录（不影响运行数据目录）。
-
-如果需要指定 Python 命令：
+生成 Velopack 发布资产：
 
 ```powershell
-.\scripts\build_windows.ps1 -Python "py -3.12"
-```
-## 常见问题
-
-### 无法采集电影列表
-
-检查 `.env` 中的 `TMDB_TOKEN` 是否填写，并确认网络可以访问 TMDb。
-
-### 某个字幕源没有结果
-
-检查对应 Token 或账号配置。也可以通过 `SUBTITLE_PROVIDER_DISABLED` 临时禁用某个字幕源，例如：
-
-```dotenv
-SUBTITLE_PROVIDER_DISABLED=opensubtitles
+.\scripts\build_windows.ps1 -Pack
 ```
 
-### 下载或搜索太频繁
+输出目录 `dist\releases`，包含：
 
-调大 `.env` 中的请求间隔：
+- `releases.win.json`
+- `SubtitleInfoCollection-<version>-full.nupkg`
+- `SubtitleInfoCollection-win-Setup.exe`
+- `SubtitleInfoCollection-win-Portable.zip`
 
-```dotenv
-SUBTITLE_REQUEST_INTERVAL_MS=20000
+打包脚本会：
+
+1. 安装后端与前端依赖；
+2. `npm ci` + `npm run build`；
+3. 运行 PyInstaller onedir；
+4. 复制并精简 Playwright 无头浏览器；
+5. 校验产物不含 `.env` 与疑似密钥；
+6. `-Pack` 时自动准备本地 .NET 8 运行时与 `vpk`，生成 Velopack 资产。
+
+`vpk` 不需要全局 .NET SDK；首次打包会把运行时和工具下载到 `scripts/tools/`（该目录不入库）。
+
+## 更新与发布
+
+客户端使用匿名 `GithubSource` 读取公开仓库 Releases：
+
+```text
+https://github.com/jingge007/subtitleInfoCollection
 ```
 
-### 输出文件越来越多
+源码仓库已公开，因此不需要再建单独的公开 Releases 仓库。发布时：
 
-在“设置”页点击“删除输出文件”。该操作会删除 `数据目录/output` 并清空采集历史，但会保留本地解析产物和数据库缓存。
+1. 修改 `backend/src/subtitle_info_collection/__init__.py` 与 `backend/pyproject.toml` 的版本号；
+2. 更新 `CHANGELOG.md`；
+3. 执行 `.\scripts\build_windows.ps1 -Pack`；
+4. 创建与版本一致的 tag（例如 `v0.2.2`）；
+5. 把 `dist\releases` 中全部资产上传到该 Release；
+6. 确认 `releases.win.json` 可匿名访问。
+
+注意：
+
+- GitHub 匿名 API 有每小时 60 次的单 IP 限制，更新检查失败时应提示稍后重试。
+- 当前未配置代码签名，Setup/Portable 首次运行可能触发 SmartScreen 提示。
+- `VELOPACK_GITHUB_TOKEN` 只用于本地发布或 CI 上传，不要写入仓库、`.env.example` 或客户端。
+
+## 公开仓库安全
+
+本项目已公开，公开范围包括完整 Git 历史。当前仓库没有提交真实 `.env`，打包 spec 只包含 `.env.example`，构建脚本会再次扫描产物。
+
+仍需注意：
+
+- 如果曾经在聊天、日志、截图或旧提交中暴露过 Token/密码，应在对应平台轮换。
+- 不要把真实 `.env`、Cookie、抓包结果、账号密码放进 `outputs/`、`work/` 或提交历史。
+- 新增配置项时，密钥键在 `.env.example` 中必须保持空值，并补充中文说明。
+
+## 相关文档
+
+- `docs/architecture.md`：分层、js_api 契约、任务状态机、数据路径
+- `docs/development.md`：本地开发、调试、测试、打包、发布
+- `CHANGELOG.md`：版本变更
+- `AGENTS.md`：仓库协作约束
