@@ -1,5 +1,5 @@
 ---
-description: Python 分层、命名、错误与 GUI/Worker 约定
+description: Python 分层、命名、错误与 Web/Service 约定
 globs: "**/*.py"
 alwaysApply: false
 ---
@@ -10,7 +10,7 @@ alwaysApply: false
 - 包内相对导入；测试用 `subtitle_info_collection.*` 绝对导入。
 - 类 PascalCase；函数/变量 snake_case；常量 UPPER_SNAKE_CASE；私有 `_` 前缀。
 - 数据类优先 `@dataclass(slots=True)`；类型用 `X | None`。
-- GUI/Worker Signal 载荷 dict 键用 camelCase；Python 字段用 snake_case。
+- js_api / 任务快照载荷 dict 键用 camelCase；Python 字段用 snake_case。
 - docstring 与用户可见日志/错误用简体中文；新增或修改的函数上一行加中文 `#` 注释说明意图。
 - Ruff：`line-length = 100`。
 
@@ -18,10 +18,13 @@ alwaysApply: false
 
 - `adapters/`：外部 API/站点；实现 `ProviderAdapter`。
 - `engines/`：解码、打分、解压、OCR 等可单测逻辑。
-- `gui/`：仅 UI；后台任务经 `gui/worker.py`（QThread + `asyncio.run`）。
+- `web/api.py`：js_api 门面，只做校验、camelCase 转换与服务调用。
+- `web/services/`：参数转换与任务包装，不复制采集主流程。
+- `web/tasks.py`：任务线程与 asyncio loop，长任务不阻塞窗口。
 - 采集主流程变更走 `SubtitleCollectionOrchestrator`。
 - 33 台词等放 `automation/`，与采集解耦。
-- GUI 禁止直接调用 httpx / Playwright。
+- Vue 页面与 `AppApi` 禁止直接调用 httpx / Playwright。
+- 前端接口变更同步 `frontend/src/api/bridge.ts` 与 `docs/architecture.md`。
 
 ## 错误
 
